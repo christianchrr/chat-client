@@ -78,22 +78,44 @@ public record LocalModelHardware(
                         + gibibytes(option.estimatedDownloadBytes()) + " GB";
     }
 
+    /** Rough expectation of reply speed: Fast (fully on the GPU), Okay (usable), or Slow (partly or fully on the CPU). */
+    public String speedEstimate(ModelOption option) {
+        if (systemRamBytes < option.recommendedRamBytes()) {
+            return "Slow";
+        }
+        long vram = gpuVramBytes.isPresent() ? gpuVramBytes.getAsLong() : 0;
+        if (vram >= option.recommendedVramBytes()) {
+            return "Fast";
+        }
+        if (vram >= option.recommendedVramBytes() * 3 / 4) {
+            return "Okay";
+        }
+        return option.estimatedDownloadBytes() <= 3L * 1024 * 1024 * 1024 ? "Okay" : "Slow";
+    }
+
     public String defaultModelId(List<ModelOption> options) {
         if (options == null || options.isEmpty()) {
             throw new IllegalArgumentException("At least one model option is required");
         }
-        if (gpuVramBytes.isEmpty()) {
-            return options.get(0).modelId();
-        }
-        return options.stream()
+        List<ModelOption> textModels = options.stream().filter(option -> !isVisionModel(option)).toList();
+        List<ModelOption> candidates = (textModels.isEmpty() ? options : textModels).stream()
                 .filter(option -> systemRamBytes >= option.recommendedRamBytes())
-                .filter(option -> gpuVramBytes.getAsLong() >= option.recommendedVramBytes())
                 .filter(this::hasEnoughDisk)
+                .toList();
+        return candidates.stream()
+                .filter(option -> "Fast".equals(speedEstimate(option)))
                 .max(Comparator.comparingLong(ModelOption::recommendedVramBytes))
-                .orElse(options.get(0))
+                .or(() -> candidates.stream()
+                        .filter(option -> "Okay".equals(speedEstimate(option)))
+                        .max(Comparator.comparingLong(ModelOption::estimatedDownloadBytes)))
+                .orElse(textModels.isEmpty() ? options.get(0) : textModels.get(0))
                 .modelId();
     }
 
+    private static boolean isVisionModel(ModelOption option) {
+        String id = option.modelId().toLowerCase(java.util.Locale.ROOT);
+        return id.contains("vision") || id.contains("vl:");
+    }
     public String summary() {
         String gpu = gpuVramBytes.isPresent() ? gibibytes(gpuVramBytes.getAsLong()) + " GB VRAM" : "GPU VRAM unknown";
         String disk = freeDiskKnown ? gibibytes(freeDiskBytes) + " GB free disk" : "free disk unknown";

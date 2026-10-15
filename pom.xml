@@ -36,6 +36,7 @@
         <archunit.version>1.2.1</archunit.version>
         <jsoup.version>1.18.1</jsoup.version>
         <pdfbox.version>3.0.3</pdfbox.version>
+        <poi.version>5.3.0</poi.version>
     </properties>
 
     <dependencyManagement>
@@ -77,6 +78,11 @@
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${pdfbox.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.poi</groupId>
+                <artifactId>poi-ooxml</artifactId>
+                <version>${poi.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

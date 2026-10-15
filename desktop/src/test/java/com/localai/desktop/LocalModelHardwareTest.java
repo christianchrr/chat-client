@@ -42,4 +42,24 @@ class LocalModelHardwareTest {
                 LocalModelHardware.parseAdapterMemory("536870912\r\n25757220864\r\n"));
         assertEquals(OptionalLong.empty(), LocalModelHardware.parseAdapterMemory("error\r\n"));
     }
+
+    @Test
+    void recommendsSmallModelsOnComputersWithoutAUsableGpu() {
+        List<ModelOption> options = List.of(
+                new ModelOption("llama3.2:latest", 2 * GIB, 4 * GIB, 8 * GIB),
+                new ModelOption("qwen3:4b", 3 * GIB, 4 * GIB, 8 * GIB),
+                new ModelOption("qwen3:8b", 6 * GIB, 8 * GIB, 16 * GIB),
+                new ModelOption("qwen2.5vl:7b", 6 * GIB, 8 * GIB, 16 * GIB));
+        LocalModelHardware cpuOnly = new LocalModelHardware(16 * GIB, OptionalLong.empty(), 100 * GIB);
+        assertEquals("qwen3:4b", cpuOnly.defaultModelId(options));
+        assertEquals("Okay", cpuOnly.speedEstimate(options.get(1)));
+        assertEquals("Slow", cpuOnly.speedEstimate(options.get(2)));
+
+        LocalModelHardware midRange = new LocalModelHardware(32 * GIB, OptionalLong.of(8 * GIB), 100 * GIB);
+        assertEquals("qwen3:8b", midRange.defaultModelId(options));
+        assertEquals("Fast", midRange.speedEstimate(options.get(2)));
+
+        LocalModelHardware tiny = new LocalModelHardware(8 * GIB, OptionalLong.of(GIB), 100 * GIB);
+        assertEquals("qwen3:4b", tiny.defaultModelId(options));
+    }
 }

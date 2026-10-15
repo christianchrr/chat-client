@@ -42,6 +42,7 @@ public final class ProductLauncher {
         }
         Path selectionFile = dataDirectory.resolve("config").resolve("selected-model.txt");
         LocalModelHardware hardware = LocalModelHardware.detect(dataDirectory);
+        markFirstRunWithoutModel(selectionFile);
         boolean noModelSelected = hasExplicitNoSelection(selectionFile);
         String modelId = noModelSelected
                 ? null
@@ -124,6 +125,20 @@ public final class ProductLauncher {
                     .findFirst();
         } catch (java.io.IOException e) {
             throw new IllegalStateException("Could not read the saved local model selection.", e);
+        }
+    }
+
+    /** On first launch nothing is downloaded but the runtime; the user chooses a model inside the app. */
+    static void markFirstRunWithoutModel(Path selectionFile) {
+        if (Files.exists(selectionFile)) {
+            return;
+        }
+        try {
+            Files.writeString(selectionFile,
+                    com.localai.contracts.ModelSelectionResponse.NO_SELECTION_MARKER + System.lineSeparator(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Could not save the initial model selection.", e);
         }
     }
 

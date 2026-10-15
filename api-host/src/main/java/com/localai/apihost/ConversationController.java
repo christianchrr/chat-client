@@ -75,6 +75,12 @@ public class ConversationController {
     private final int contextBudgetTokens;
     private final WebContextFetcher webContextFetcher;
     private final Map<UUID, ActiveTurn> activeTurns = new ConcurrentHashMap<>();
+    private volatile DropboxService dropboxService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setDropboxService(DropboxService dropboxService) {
+        this.dropboxService = dropboxService;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public ConversationController(
@@ -219,6 +225,53 @@ public class ConversationController {
         } catch (ModelSelectionException e) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(Map.of("error", "model_install_failed", "message", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/models/capabilities")
+    public Map<String, Boolean> modelCapabilities(
+            @org.springframework.web.bind.annotation.RequestParam("modelId") String modelId) {
+        return Map.of(
+                "vision", modelGenerationService.supportsVision(modelId),
+                "thinking", modelGenerationService.supportsThinking(modelId));
+    }
+
+    @PostMapping("/models/cancel-download")
+    public ResponseEntity<?> cancelModelDownload(@RequestBody(required = false) ModelSelectionRequest request) {
+        if (request == null || request.modelId() == null || request.modelId().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "model_id_required"));
+        }
+        if (!(modelGenerationService instanceof ModelLifecycleService lifecycleService)) {
+            return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
+                    .body(Map.of("error", "model_lifecycle_unsupported"));
+        }
+        try {
+            lifecycleService.cancelDownload(request.modelId());
+            return ResponseEntity.ok(Map.of("modelId", request.modelId(), "cancelled", true));
+        } catch (ModelSelectionException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "model_not_allowed"));
+        }
+    }
+
+    @PostMapping("/models/speed-test")
+    public ResponseEntity<?> measureModelSpeed(@RequestBody(required = false) ModelSelectionRequest request) {
+        if (request == null || request.modelId() == null || request.modelId().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "model_id_required"));
+        }
+        if (!(modelGenerationService instanceof ModelLifecycleService lifecycleService)) {
+            return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
+                    .body(Map.of("error", "model_lifecycle_unsupported"));
+        }
+        try {
+            return ResponseEntity.ok(lifecycleService.measureSpeed(request.modelId()));
+        } catch (ModelSelectionException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "model_not_allowed"));
+        } catch (UnsupportedOperationException e) {
+            return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
+                    .body(Map.of("error", "speed_test_unsupported"));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("error", "speed_test_failed", "message", String.valueOf(e.getMessage())));
         }
     }
 
@@ -714,7 +767,8 @@ public class ConversationController {
             }
             ContextAssembly context = assembleContext(turn);
             conversationStore.saveContextManifest(context.manifest());
-            modelGenerationService.streamText(activeModelId(), context.prompt(), token -> {
+            modelGenerationService.streamText(activeModelId(), context.prompt(), attachedImages(context.prompt()),
+                    Boolean.TRUE.equals(turnRequest.thinking()), token -> {
                 if (activeTurn.cancelled.get()) {
                     throw new TurnCancelledException();
                 }
@@ -875,6 +929,23 @@ public class ConversationController {
 
     private String activeModelId() {
         return modelSelectionService == null ? defaultModelId : modelSelectionService.activeModelId();
+    }
+
+    private List<String> attachedImages(String prompt) {
+        DropboxService dropbox = dropboxService;
+        if (dropbox == null || !modelGenerationService.supportsVision(activeModelId())) {
+            return List.of();
+        }
+        List<String> names = DropboxService.imageNames(prompt);
+        List<String> images = new java.util.ArrayList<>();
+        for (String name : names.subList(Math.max(0, names.size() - 3), names.size())) {
+            try {
+                images.add(java.util.Base64.getEncoder().encodeToString(dropbox.readImage(name)));
+            } catch (DropboxService.DropboxException e) {
+                // The file was removed after being attached; the turn continues without it.
+            }
+        }
+        return images;
     }
 
     private ContextAssembly assembleContext(TurnRecord turn) {

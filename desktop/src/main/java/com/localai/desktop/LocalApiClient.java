@@ -94,6 +94,22 @@ public final class LocalApiClient {
                 com.fasterxml.jackson.databind.JsonNode.class, Duration.ofHours(12));
     }
 
+    public boolean modelSupportsThinking(String modelId) {
+        String encodedModelId = java.net.URLEncoder.encode(modelId, java.nio.charset.StandardCharsets.UTF_8);
+        return send("GET", "/api/v1/models/capabilities?modelId=" + encodedModelId, null,
+                com.fasterxml.jackson.databind.JsonNode.class).path("thinking").asBoolean(false);
+    }
+
+    public com.localai.contracts.ModelSpeedResult measureModelSpeed(String modelId) {
+        return send("POST", "/api/v1/models/speed-test", new ModelSelectionRequest(modelId),
+                com.localai.contracts.ModelSpeedResult.class, Duration.ofMinutes(5));
+    }
+
+    public void cancelModelDownload(String modelId) {
+        send("POST", "/api/v1/models/cancel-download", new ModelSelectionRequest(modelId),
+                com.fasterxml.jackson.databind.JsonNode.class);
+    }
+
     public void uninstallModel(String modelId) {
         send("POST", "/api/v1/models/uninstall", new ModelSelectionRequest(modelId),
                 com.fasterxml.jackson.databind.JsonNode.class);
@@ -238,13 +254,22 @@ public final class LocalApiClient {
             String content,
             String clientRequestId,
             Consumer<StreamEvent> eventConsumer) {
+        streamTurn(conversationId, content, clientRequestId, false, eventConsumer);
+    }
+
+    public void streamTurn(
+            UUID conversationId,
+            String content,
+            String clientRequestId,
+            boolean thinking,
+            Consumer<StreamEvent> eventConsumer) {
         if (eventConsumer == null) {
             throw new IllegalArgumentException("eventConsumer must not be null");
         }
         String path = "/api/v1/conversations/" + conversationId + "/turns/stream";
         StreamCursor cursor = new StreamCursor();
         try {
-            String requestBody = objectMapper.writeValueAsString(new TurnRequest(content, clientRequestId));
+            String requestBody = objectMapper.writeValueAsString(new TurnRequest(content, clientRequestId, thinking));
             for (int attempt = 0; attempt <= 3; attempt++) {
                 HttpRequest request = attempt == 0
                         ? streamPost(path, requestBody)

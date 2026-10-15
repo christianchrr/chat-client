@@ -50,6 +50,11 @@ public final class OllamaGenerationService
     private final Path selectionFile;
     private final AtomicReference<String> activeModelId;
     private final ConcurrentHashMap<String, ModelDownloadProgress> downloadProgress = new ConcurrentHashMap<>();
+    /** Fixed so the model is loaded once and stays in VRAM instead of being resized per request. */
+    private static final int NUM_CTX = 8192;
+    private final ConcurrentHashMap<String, Boolean> visionSupport = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, InputStream> activePulls = new ConcurrentHashMap<>();
+    private final java.util.Set<String> cancelledPulls = ConcurrentHashMap.newKeySet();
 
     public OllamaGenerationService(URI baseUri) {
         this(baseUri, HttpClient.newBuilder().connectTimeout(READINESS_TIMEOUT).build(),
@@ -141,10 +146,11 @@ public final class OllamaGenerationService
         }
         Thread.startVirtualThread(() -> {
             try {
-                String body = objectMapper.createObjectNode()
+                var preload = objectMapper.createObjectNode()
                         .put("model", modelId)
-                        .put("keep_alive", "30m")
-                        .toString();
+                        .put("keep_alive", "30m");
+                preload.putObject("options").put("num_ctx", NUM_CTX);
+                String body = preload.toString();
                 HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/generate"))
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -163,6 +169,7 @@ public final class OllamaGenerationService
     public synchronized void installModel(String modelId) {
         requireConfiguredModel(modelId);
         if (!isInstalled(modelId)) {
+            cancelledPulls.remove(modelId);
             downloadProgress.put(modelId, new ModelDownloadProgress(modelId, "downloading", 0, 0, "Starting download"));
             try {
                 pullModel(modelId);
@@ -172,6 +179,56 @@ public final class OllamaGenerationService
                 downloadProgress.put(modelId, new ModelDownloadProgress(
                         modelId, "failed", 0, 0, e.getMessage() == null ? "Download failed" : e.getMessage()));
                 throw e;
+            }
+        }
+    }
+
+    @Override
+    public com.localai.contracts.ModelSpeedResult measureSpeed(String modelId) {
+        requireConfiguredModel(modelId);
+        try {
+            var generation = objectMapper.createObjectNode()
+                    .put("model", modelId)
+                    .put("prompt", "Write a short paragraph about why the sky is blue.")
+                    .put("stream", false)
+                    .put("keep_alive", "30m");
+            if (supportsThinking(modelId)) {
+                generation.put("think", false);
+            }
+            generation.putObject("options").put("num_ctx", NUM_CTX).put("num_predict", 64);
+            HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/generate"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(generation.toString()))
+                    .timeout(GENERATION_TIMEOUT)
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new ModelGenerationException("Speed test failed with HTTP " + response.statusCode());
+            }
+            JsonNode result = objectMapper.readTree(response.body());
+            int tokens = result.path("eval_count").asInt(0);
+            double evalSeconds = result.path("eval_duration").asLong(0) / 1_000_000_000.0;
+            double loadSeconds = result.path("load_duration").asLong(0) / 1_000_000_000.0;
+            double tokensPerSecond = evalSeconds > 0 ? tokens / evalSeconds : 0;
+            return new com.localai.contracts.ModelSpeedResult(modelId, tokensPerSecond, loadSeconds, tokens);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ModelGenerationException("Speed test was interrupted", e);
+        } catch (IOException e) {
+            throw new ModelGenerationException("Speed test failed", e);
+        }
+    }
+
+    @Override
+    public void cancelDownload(String modelId) {
+        requireConfiguredModel(modelId);
+        cancelledPulls.add(modelId);
+        InputStream stream = activePulls.get(modelId);
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (IOException ignored) {
+                // The pull loop reports the cancellation.
             }
         }
     }
@@ -329,6 +386,11 @@ public final class OllamaGenerationService
                 .build();
         try {
             HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            activePulls.put(modelId, response.body());
+            if (cancelledPulls.contains(modelId)) {
+                response.body().close();
+                throw new ModelSelectionException("Download cancelled. Download again to resume.");
+            }
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 response.body().close();
                 throw new ModelSelectionException("Ollama model download failed with HTTP " + response.statusCode());
@@ -356,14 +418,22 @@ public final class OllamaGenerationService
                     }
                 }
                 if (!completed) {
+                    if (cancelledPulls.contains(modelId)) {
+                        throw new ModelSelectionException("Download cancelled. Download again to resume.");
+                    }
                     throw new ModelSelectionException("Ollama ended the download before reporting success.");
                 }
             }
         } catch (IOException e) {
+            if (cancelledPulls.contains(modelId)) {
+                throw new ModelSelectionException("Download cancelled. Download again to resume.", e);
+            }
             throw new ModelSelectionException("Could not complete the Ollama model download.", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ModelSelectionException("The Ollama model download was interrupted.", e);
+        } finally {
+            activePulls.remove(modelId);
         }
     }
 
@@ -454,7 +524,63 @@ public final class OllamaGenerationService
     }
 
     @Override
+    public boolean supportsVision(String modelId) {
+        return hasCapability(modelId, "vision");
+    }
+
+    @Override
+    public boolean supportsThinking(String modelId) {
+        return hasCapability(modelId, "thinking");
+    }
+
+    private boolean hasCapability(String modelId, String capabilityName) {
+        if (modelId == null || modelId.isBlank()) {
+            return false;
+        }
+        String cacheKey = modelId + "|" + capabilityName;
+        Boolean cached = visionSupport.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/show"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                            objectMapper.createObjectNode().put("model", modelId).toString()))
+                    .timeout(READINESS_TIMEOUT)
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return false;
+            }
+            boolean found = false;
+            for (JsonNode capability : objectMapper.readTree(response.body()).path("capabilities")) {
+                found |= capabilityName.equals(capability.asText());
+            }
+            visionSupport.put(cacheKey, found);
+            return found;
+        } catch (IOException e) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    @Override
     public void streamText(String modelId, String prompt, Consumer<String> tokenConsumer) {
+        streamText(modelId, prompt, List.of(), tokenConsumer);
+    }
+
+    @Override
+    public void streamText(String modelId, String prompt, List<String> imagesBase64,
+            Consumer<String> tokenConsumer) {
+        streamText(modelId, prompt, imagesBase64, false, tokenConsumer);
+    }
+
+    @Override
+    public void streamText(String modelId, String prompt, List<String> imagesBase64, boolean thinking,
+            Consumer<String> tokenConsumer) {
         if (modelId == null || modelId.isBlank()) {
             throw new IllegalArgumentException("modelId must not be blank");
         }
@@ -467,12 +593,20 @@ public final class OllamaGenerationService
 
         String requestBody;
         try {
-            requestBody = objectMapper.createObjectNode()
+            var generation = objectMapper.createObjectNode()
                     .put("model", modelId)
                     .put("prompt", prompt)
                     .put("stream", true)
-                    .put("keep_alive", "30m")
-                    .toString();
+                    .put("keep_alive", "30m");
+            if (supportsThinking(modelId)) {
+                generation.put("think", thinking);
+            }
+            generation.putObject("options").put("num_ctx", NUM_CTX);
+            if (imagesBase64 != null && !imagesBase64.isEmpty()) {
+                var images = generation.putArray("images");
+                imagesBase64.forEach(images::add);
+            }
+            requestBody = generation.toString();
         } catch (RuntimeException e) {
             throw new ModelGenerationException("Failed to encode Ollama generation request", e);
         }

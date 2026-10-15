@@ -47,6 +47,17 @@ class ProductLauncherApiTest {
     }
 
     @Test
+    void firstRunStartsWithoutAModelButKeepsAnExistingChoice() throws Exception {
+        Path selectionFile = temporaryDirectory.resolve("first-run.txt");
+
+        ProductLauncher.markFirstRunWithoutModel(selectionFile);
+        assertTrue(ProductLauncher.hasExplicitNoSelection(selectionFile));
+
+        Files.writeString(selectionFile, "qwen3:30b");
+        ProductLauncher.markFirstRunWithoutModel(selectionFile);
+        assertFalse(ProductLauncher.hasExplicitNoSelection(selectionFile));
+    }
+    @Test
     void packagedApiReadsAndCreatesConversationsUsingItsSqliteDatabase() throws Exception {
         String token = UUID.randomUUID().toString();
         try (ConfigurableApplicationContext api = new SpringApplicationBuilder(ApiHostApplication.class)

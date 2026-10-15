@@ -20,13 +20,14 @@ class ModelCatalogConfigurationTest {
     void loadsTheBundledAllowListAndHardwareEstimates() {
         var options = ModelCatalogConfiguration.loadDefault();
 
-        assertEquals(List.of("llama3.2:latest", "qwen3:14b", "qwen3:30b", "qwen3:32b"),
+        assertEquals(List.of("llama3.2:latest", "qwen3:4b", "qwen3:8b", "qwen3:14b", "qwen3:30b", "qwen3:32b",
+                "qwen2.5vl:7b", "llama3.2-vision:11b"),
                 options.stream().map(option -> option.modelId()).toList());
         assertEquals("Llama 3.2 3B", options.getFirst().displayName());
         assertEquals(2L * 1024 * 1024 * 1024, options.getFirst().estimatedDownloadBytes());
-        assertEquals("Qwen3 30B", options.get(2).displayName());
-        assertEquals(20L * 1024 * 1024 * 1024, options.get(2).estimatedDownloadBytes());
-        assertEquals(22L * 1024 * 1024 * 1024, options.get(2).recommendedVramBytes());
+        assertEquals("Qwen3 30B", options.get(4).displayName());
+        assertEquals(20L * 1024 * 1024 * 1024, options.get(4).estimatedDownloadBytes());
+        assertEquals(22L * 1024 * 1024 * 1024, options.get(4).recommendedVramBytes());
     }
 
     @Test

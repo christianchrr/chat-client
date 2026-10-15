@@ -72,6 +72,9 @@ class OllamaGenerationServiceTest {
             assertTrue(generationRequest.get().contains("\"prompt\":\"hello from test\""));
             assertTrue(generationRequest.get().contains("\"stream\":true"));
             assertTrue(generationRequest.get().contains("\"keep_alive\":\"30m\""));
+            assertFalse(generationRequest.get().contains("\"think\""));
+            assertTrue(generationRequest.get().contains("\"num_ctx\":8192"));
+            assertFalse(generationRequest.get().contains("\"images\""));
         } finally {
             server.stop(0);
         }
@@ -149,7 +152,8 @@ class OllamaGenerationServiceTest {
             assertEquals(1, pulls.get());
             org.junit.jupiter.api.Assertions.assertThrows(
                     ModelSelectionException.class, () -> service.selectModel("qwen3:235b"));
-            assertEquals(List.of("llama3.2:latest", "qwen3:14b", "qwen3:30b", "qwen3:32b"),
+            assertEquals(List.of("llama3.2:latest", "qwen3:4b", "qwen3:8b", "qwen3:14b", "qwen3:30b", "qwen3:32b",
+                "qwen2.5vl:7b", "llama3.2-vision:11b"),
                     options.stream().map(option -> option.modelId()).toList());
             assertTrue(options.getFirst().estimatedDownloadBytes() < options.get(1).estimatedDownloadBytes());
         } finally {
@@ -273,6 +277,48 @@ class OllamaGenerationServiceTest {
         } finally {
             Files.deleteIfExists(selectionFile);
             Files.deleteIfExists(temporaryDirectory);
+        }
+    }
+
+    @Test
+    void sendsImagesOnlyWhenGivenAndDetectsVisionCapability() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> generationRequest = new AtomicReference<>();
+        server.createContext("/api/show", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            byte[] response = (body.contains("vision-model")
+                    ? "{\"capabilities\":[\"completion\",\"vision\",\"thinking\"]}"
+                    : "{\"capabilities\":[\"completion\"]}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(response);
+            }
+        });
+        server.createContext("/api/generate", exchange -> {
+            generationRequest.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"response\":\"ok\",\"done\":true}\n".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(response);
+            }
+        });
+        server.start();
+        try {
+            var service = new OllamaGenerationService(
+                    URI.create("http://127.0.0.1:" + server.getAddress().getPort()));
+            assertTrue(service.supportsVision("vision-model"));
+            assertFalse(service.supportsVision("text-model"));
+            service.streamText("vision-model", "describe", List.of("QUJD"), ignored -> { });
+            assertTrue(generationRequest.get().contains("\"images\":[\"QUJD\"]"));
+            assertTrue(service.supportsThinking("vision-model"));
+            assertFalse(service.supportsThinking("text-model"));
+            assertTrue(generationRequest.get().contains("\"think\":false"));
+            service.streamText("vision-model", "think hard", List.of(), true, ignored -> { });
+            assertTrue(generationRequest.get().contains("\"think\":true"));
+            service.streamText("text-model", "plain", List.of(), true, ignored -> { });
+            assertFalse(generationRequest.get().contains("\"think\""));
+        } finally {
+            server.stop(0);
         }
     }
 }

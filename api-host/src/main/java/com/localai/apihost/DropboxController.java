@@ -2,6 +2,8 @@ package com.localai.apihost;
 
 import com.localai.contracts.MessageRole;
 import com.localai.contracts.MessageRecord;
+import com.localai.model.ModelGenerationService;
+import com.localai.model.ModelSelectionService;
 import com.localai.storage.ConversationStore;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -30,9 +32,15 @@ public class DropboxController {
     private final DropboxService dropbox;
     private final ConversationStore conversationStore;
 
-    public DropboxController(DropboxService dropbox, ConversationStore conversationStore) {
+    private final ModelGenerationService modelGenerationService;
+
+    public DropboxController(
+            DropboxService dropbox,
+            ConversationStore conversationStore,
+            ModelGenerationService modelGenerationService) {
         this.dropbox = dropbox;
         this.conversationStore = conversationStore;
+        this.modelGenerationService = modelGenerationService;
     }
 
     @GetMapping("/dropbox/files")
@@ -81,6 +89,9 @@ public class DropboxController {
                 || request.names().size() > 5) {
             return ResponseEntity.badRequest().body(Map.of("error", "dropbox_file_names_required"));
         }
+        if (request.names().stream().anyMatch(DropboxService::isImage) && !activeModelSeesImages()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "image_requires_vision_model"));
+        }
         try {
             List<String> sources = request.names().stream().map(dropbox::contextFor).toList();
             List<MessageRecord> saved = sources.stream()
@@ -90,6 +101,12 @@ public class DropboxController {
         } catch (DropboxService.DropboxException e) {
             return error(e);
         }
+    }
+
+    private boolean activeModelSeesImages() {
+        return modelGenerationService instanceof ModelSelectionService selection
+                && selection.activeModelId() != null
+                && modelGenerationService.supportsVision(selection.activeModelId());
     }
 
     private static ResponseEntity<Map<String, String>> error(DropboxService.DropboxException e) {

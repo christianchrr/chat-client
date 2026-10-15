@@ -47,15 +47,24 @@ public class DesktopController extends Application {
     private final ComboBox<com.localai.contracts.ConversationRecord> conversationPicker = new ComboBox<>();
     private final ComboBox<ModelOption> modelPicker = new ComboBox<>();
     private final Label modelAdvice = new Label("Detecting model fit...");
+    private final Button modelDownloadButton = new Button("Download");
+    private final Label modelInstalledBadge = new Label("\u2713 Installed");
     private final ProgressBar modelDownloadProgressBar = new ProgressBar(0);
     private final Label modelDownloadProgressLabel = new Label();
-    private final HBox downloadProgressRow = new HBox(10, modelDownloadProgressLabel, modelDownloadProgressBar);
+    private final Button cancelDownloadButton = new Button("Cancel");
+    private final Label storageSummary = new Label();
+    private final java.util.Map<String, Button> libraryCancelButtons = new java.util.HashMap<>();
+    private final HBox downloadProgressRow = new HBox(10, modelDownloadProgressLabel, modelDownloadProgressBar,
+            cancelDownloadButton);
     private final Button sendButton = new Button("Send");
     private final Button newConversationButton = new Button("New conversation");
     private final Button deleteConversationButton = new Button("Delete chat");
     private final Button cancelButton = new Button("Cancel");
     private final Button memoryButton = new Button("Conversation memory");
     private final Button modelsButton = new Button("Model library");
+    private final Button helpButton = new Button("Help");
+    private final javafx.scene.control.CheckBox thinkingToggle = new javafx.scene.control.CheckBox("Thinking");
+    private final java.util.Map<String, Boolean> thinkingSupport = new java.util.concurrent.ConcurrentHashMap<>();
     private final Button webContextButton = new Button("Add web context");
     private final Button dropboxButton = new Button("Dropbox");
     private volatile String pendingEditFile;
@@ -77,6 +86,7 @@ public class DesktopController extends Application {
     });
     private LocalApiClient apiClient;
     private VBox welcomeCard;
+    private VBox welcomeSetup;
     private java.util.UUID conversationId;
     private volatile java.util.UUID activeTurnId;
     private boolean updatingConversationPicker;
@@ -113,6 +123,9 @@ public class DesktopController extends Application {
         status.setWrapText(true);
         status.setMaxWidth(260);
         modelDownloadProgressLabel.getStyleClass().add("download-progress-label");
+        cancelDownloadButton.getStyleClass().add("cancel-button");
+        cancelDownloadButton.setOnAction(event -> cancelActiveDownload());
+        storageSummary.getStyleClass().add("library-guidance");
         modelDownloadProgressBar.setMaxWidth(Double.MAX_VALUE);
         modelDownloadProgressBar.setPrefWidth(260);
         downloadProgressRow.getStyleClass().add("download-progress-row");
@@ -159,7 +172,7 @@ public class DesktopController extends Application {
                 }
             }
         });
-        modelPicker.setPromptText("No model selected — choose one to start chatting");
+        modelPicker.setPromptText("Choose a model to start");
         modelPicker.setPrefWidth(250);
         modelAdvice.setWrapText(true);
         modelAdvice.setMaxWidth(Double.MAX_VALUE);
@@ -183,6 +196,18 @@ public class DesktopController extends Application {
             @Override
             public ModelOption fromString(String value) {
                 return null;
+            }
+        });
+        modelPicker.setButtonCell(new javafx.scene.control.ListCell<>() {
+            @Override
+            protected void updateItem(ModelOption item, boolean empty) {
+                super.updateItem(item, empty);
+                boolean placeholder = empty || item == null;
+                setText(placeholder ? modelPicker.getPromptText() : modelPicker.getConverter().toString(item));
+                getStyleClass().remove("combo-prompt");
+                if (placeholder) {
+                    getStyleClass().add("combo-prompt");
+                }
             }
         });
         modelPicker.setOnAction(event -> {
@@ -242,10 +267,42 @@ public class DesktopController extends Application {
         HBox.setHgrow(conversationPicker, Priority.ALWAYS);
         Label modelLabel = new Label("Model");
         modelLabel.getStyleClass().add("section-label");
-        HBox modelRow = new HBox(10, modelLabel, modelPicker, modelAdvice);
+        modelDownloadButton.getStyleClass().add("primary-button");
+        modelDownloadButton.setTooltip(new javafx.scene.control.Tooltip("Download the selected model"));
+        modelDownloadButton.setOnAction(event -> {
+            ModelOption chosen = modelPicker.getValue();
+            if (chosen != null && !modelSwitching) {
+                beginModelSwitch(chosen, false);
+            }
+        });
+        modelInstalledBadge.getStyleClass().addAll("badge", "badge-ok", "installed-pill");
+        for (javafx.scene.Node node : new javafx.scene.Node[] {modelDownloadButton, modelInstalledBadge}) {
+            node.managedProperty().bind(node.visibleProperty());
+            node.setVisible(false);
+        }
+        thinkingToggle.setTooltip(new javafx.scene.control.Tooltip(
+                "Let the model reason before answering. Better for hard problems, but replies start later."));
+        thinkingToggle.managedProperty().bind(thinkingToggle.visibleProperty());
+        thinkingToggle.setVisible(false);
+        thinkingToggle.setSelected(java.nio.file.Files.exists(thinkingPreferenceFile()));
+        thinkingToggle.selectedProperty().addListener((observable, previous, selected) -> saveThinkingPreference(selected));
+        HBox modelRow = new HBox(10, modelLabel, modelPicker, modelDownloadButton, modelInstalledBadge, modelAdvice,
+                thinkingToggle);
         modelRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         HBox.setHgrow(modelAdvice, Priority.ALWAYS);
-        HBox toolsRow = new HBox(8, memoryButton, modelsButton, webContextButton, dropboxButton);
+        helpButton.getStyleClass().add("secondary-button");
+        helpButton.setTooltip(new javafx.scene.control.Tooltip("Logs and diagnostics for troubleshooting"));
+        javafx.scene.control.MenuItem openLogs = new javafx.scene.control.MenuItem("Open logs folder");
+        openLogs.setOnAction(event -> openLogsFolder());
+        javafx.scene.control.MenuItem copyDiagnostics = new javafx.scene.control.MenuItem("Copy diagnostics");
+        copyDiagnostics.setOnAction(event -> copyDiagnostics());
+        javafx.scene.control.MenuItem testSpeed = new javafx.scene.control.MenuItem("Test model speed");
+        testSpeed.setOnAction(event -> runSpeedTest(modelPicker.getItems().stream()
+                .filter(option -> option.modelId().equals(activeModelId)).findFirst().orElse(null)));
+        javafx.scene.control.ContextMenu helpMenu =
+                new javafx.scene.control.ContextMenu(testSpeed, openLogs, copyDiagnostics);
+        helpButton.setOnAction(event -> helpMenu.show(helpButton, javafx.geometry.Side.BOTTOM, 0, 4));
+        HBox toolsRow = new HBox(8, memoryButton, modelsButton, webContextButton, dropboxButton, helpButton);
         toolsRow.getStyleClass().add("toolbar");
         VBox header = new VBox(15, topBar, conversationRow, modelRow, toolsRow);
         header.getStyleClass().add("app-header");
@@ -270,6 +327,10 @@ public class DesktopController extends Application {
         stage.setMinWidth(860);
         stage.setMinHeight(640);
         stage.setTitle("Local AI Assistant");
+        var icon = getClass().getResourceAsStream("app-icon.png");
+        if (icon != null) {
+            stage.getIcons().add(new javafx.scene.image.Image(icon));
+        }
         stage.show();
         initializeConversation();
     }
@@ -552,6 +613,7 @@ public class DesktopController extends Application {
     private void setConversationControlsDisabled(boolean disabled) {
         conversationPicker.setDisable(disabled);
         modelPicker.setDisable(disabled || !modelOptionsReady || modelSwitching);
+        modelDownloadButton.setDisable(disabled || modelSwitching);
         newConversationButton.setDisable(disabled);
         memoryButton.setDisable(disabled || conversationId == null);
         modelsButton.setDisable(disabled);
@@ -595,7 +657,7 @@ public class DesktopController extends Application {
             modelPicker.getItems().setAll(options);
             activeModelId = selection.modelId();
             modelPicker.setPromptText(activeModelId == null
-                    ? "No model selected — choose one to start chatting"
+                    ? "Choose a model to start"
                     : "Select a local model");
             modelPicker.setValue(options.stream()
                     .filter(option -> option.modelId().equals(selection.modelId()))
@@ -614,13 +676,20 @@ public class DesktopController extends Application {
             return;
         }
         boolean installed = isModelInstalled(option.modelId());
+        if (!installed) {
+            updateModelAdvice(option);
+            return;
+        }
+        beginModelSwitch(option, true);
+    }
+
+    private void beginModelSwitch(ModelOption option, boolean installed) {
         if (!installed && !modelHardware.hasEnoughDisk(option)) {
             Alert warning = new Alert(Alert.AlertType.WARNING,
                     modelHardware.diskAdvisory(option) + ". Free disk space before downloading this model.",
                     ButtonType.OK);
             applyDialogStyles(warning);
             warning.showAndWait();
-            restoreModelPickerSelection();
             return;
         }
         String advisory = modelHardware.advisory(option);
@@ -632,9 +701,15 @@ public class DesktopController extends Application {
             warning.setContentText(advisory + "\n\nContinue and select this model?");
             warning.getButtonTypes().setAll(ButtonType.OK, ButtonType.CANCEL);
             if (warning.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) {
-                restoreModelPickerSelection();
+                if (installed) {
+                    restoreModelPickerSelection();
+                }
                 return;
             }
+        }
+
+        if (!installed && !confirmDownload(option)) {
+            return;
         }
 
         modelSwitching = true;
@@ -662,6 +737,9 @@ public class DesktopController extends Application {
                     updateModelAdvice(option);
                     status.setText("Connected — using " + activeModelId);
                     setConversationControlsDisabled(false);
+                    if (!installed) {
+                        runSpeedTest(option);
+                    }
                 });
             } catch (RuntimeException e) {
                 Platform.runLater(() -> {
@@ -672,6 +750,69 @@ public class DesktopController extends Application {
                     status.setText("Could not select " + option.displayName() + ": " + e.getMessage());
                     setConversationControlsDisabled(false);
                 });
+            }
+        });
+    }
+
+    private void openLogsFolder() {
+        java.nio.file.Path logs = applicationDataDirectory().resolve("logs");
+        try {
+            java.nio.file.Files.createDirectories(logs);
+            java.awt.Desktop.getDesktop().open(logs.toFile());
+        } catch (java.io.IOException | RuntimeException e) {
+            status.setText("Could not open the logs folder: " + logs);
+        }
+    }
+
+    private void copyDiagnostics() {
+        StringBuilder report = new StringBuilder();
+        report.append("Local AI Assistant diagnostics\n");
+        report.append("OS: ").append(System.getProperty("os.name")).append(" ")
+                .append(System.getProperty("os.version")).append("\n");
+        report.append("Java: ").append(System.getProperty("java.version")).append("\n");
+        report.append("Active model: ").append(activeModelId == null ? "none" : activeModelId).append("\n");
+        report.append("Installed models: ").append(String.join(", ", new java.util.TreeSet<>(installedModelIds)))
+                .append("\n");
+        report.append("Status: ").append(status.getText()).append("\n");
+        java.nio.file.Path logFile = applicationDataDirectory().resolve("logs").resolve("application.log");
+        try {
+            List<String> lines = java.nio.file.Files.readAllLines(logFile, java.nio.charset.StandardCharsets.UTF_8);
+            report.append("\nLast log lines:\n");
+            lines.subList(Math.max(0, lines.size() - 40), lines.size()).forEach(line -> report.append(line).append("\n"));
+        } catch (java.io.IOException | RuntimeException e) {
+            report.append("\nApplication log unavailable.\n");
+        }
+        javafx.scene.input.ClipboardContent clipboard = new javafx.scene.input.ClipboardContent();
+        clipboard.putString(report.toString());
+        javafx.scene.input.Clipboard.getSystemClipboard().setContent(clipboard);
+        status.setText("Diagnostics copied to the clipboard. Check them before sharing.");
+    }
+
+    private boolean confirmDownload(ModelOption option) {
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+        applyDialogStyles(confirm);
+        confirm.setTitle("Download model");
+        confirm.setHeaderText("Download " + option.displayName() + "?");
+        confirm.setContentText("This model is not on your computer yet. Downloading it needs about "
+                + String.format(java.util.Locale.ROOT, "%.1f", option.estimatedDownloadBytes() / 1073741824.0)
+                + " GB of disk space and may take a while. You can cancel and resume later.");
+        ButtonType download = new ButtonType("Download", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
+        confirm.getButtonTypes().setAll(download, ButtonType.CANCEL);
+        return confirm.showAndWait().orElse(ButtonType.CANCEL) == download;
+    }
+
+    private void cancelActiveDownload() {
+        String modelId = progressModelId;
+        if (modelId == null) {
+            return;
+        }
+        cancelDownloadButton.setDisable(true);
+        modelDownloadProgressLabel.setText("Cancelling...");
+        apiExecutor.execute(() -> {
+            try {
+                apiClient.cancelModelDownload(modelId);
+            } catch (RuntimeException e) {
+                Platform.runLater(() -> status.setText("Could not cancel the download: " + e.getMessage()));
             }
         });
     }
@@ -693,9 +834,66 @@ public class DesktopController extends Application {
         updateModelAdvice(modelPicker.getValue());
     }
 
+    private static java.nio.file.Path thinkingPreferenceFile() {
+        return applicationDataDirectory().resolve("config").resolve("thinking.on");
+    }
+
+    private void saveThinkingPreference(boolean enabled) {
+        try {
+            java.nio.file.Path file = thinkingPreferenceFile();
+            if (enabled) {
+                java.nio.file.Files.createDirectories(file.getParent());
+                java.nio.file.Files.writeString(file, "on");
+            } else {
+                java.nio.file.Files.deleteIfExists(file);
+            }
+        } catch (java.io.IOException e) {
+            // The switch still works for this session if the preference cannot be saved.
+        }
+    }
+
+    private void refreshThinkingSupport() {
+        String modelId = activeModelId;
+        if (modelId == null) {
+            thinkingToggle.setVisible(false);
+            return;
+        }
+        Boolean known = thinkingSupport.get(modelId);
+        if (known != null) {
+            thinkingToggle.setVisible(known);
+            return;
+        }
+        thinkingToggle.setVisible(false);
+        apiExecutor.execute(() -> {
+            try {
+                boolean supported = apiClient.modelSupportsThinking(modelId);
+                thinkingSupport.put(modelId, supported);
+                Platform.runLater(() -> {
+                    if (modelId.equals(activeModelId)) {
+                        thinkingToggle.setVisible(supported);
+                    }
+                });
+            } catch (RuntimeException e) {
+                // The switch stays hidden until the next model change if the check fails.
+            }
+        });
+    }
+
     private void updateModelAdvice(ModelOption option) {
-        if (activeModelId == null) {
-            modelAdvice.setText("No model selected · install or choose a model to start chatting");
+        refreshThinkingSupport();
+        refreshWelcomeSetup();
+        boolean installedChoice = option != null && isModelInstalled(option.modelId());
+        modelInstalledBadge.setVisible(installedChoice);
+        modelInstalledBadge.setText(installedChoice && option.modelId().equals(activeModelId)
+                ? "\u2713 Installed \u00b7 In use" : "\u2713 Installed");
+        modelDownloadButton.setVisible(option != null && !installedChoice);
+        if (activeModelId == null && option == null) {
+            String recommended = modelHardware == null || modelPicker.getItems().isEmpty()
+                    ? null
+                    : modelHardware.defaultModelId(modelPicker.getItems());
+            modelAdvice.setText(recommended == null
+                    ? "No model selected · choose one to download and start chatting"
+                    : "No model selected · recommended for this PC: " + recommended);
             return;
         }
         if (option == null || modelHardware == null) {
@@ -703,7 +901,6 @@ public class DesktopController extends Application {
             return;
         }
         boolean installedOnDisk = isModelInstalled(option.modelId());
-        String installed = installedOnDisk ? "Installed" : "Not downloaded";
         String disk = installedOnDisk
                 ? "Already downloaded"
                 : modelHardware.diskAdvisory(option);
@@ -711,7 +908,7 @@ public class DesktopController extends Application {
         if ("Fits detected hardware".equals(fit) && isRecommendedModel(option)) {
             fit = "Recommended";
         }
-        modelAdvice.setText(fit + " · " + disk + " · " + installed);
+        modelAdvice.setText(fit + " \u00b7 " + modelHardware.speedEstimate(option) + " on this PC \u00b7 " + disk);
     }
 
     private boolean isRecommendedModel(ModelOption option) {
@@ -802,12 +999,77 @@ public class DesktopController extends Application {
             });
             suggestions.getChildren().add(chip);
         }
-        VBox card = new VBox(10, heading, subtitle, suggestions);
+        welcomeSetup = new VBox(8);
+        welcomeSetup.setAlignment(Pos.CENTER);
+        VBox card = new VBox(10, heading, subtitle, welcomeSetup, suggestions);
         card.setAlignment(Pos.CENTER);
         card.getStyleClass().add("welcome-card");
         card.setMaxWidth(Double.MAX_VALUE);
         welcomeCard = card;
         transcript.getChildren().add(card);
+        refreshWelcomeSetup();
+    }
+
+    private void refreshWelcomeSetup() {
+        if (welcomeSetup == null) {
+            return;
+        }
+        welcomeSetup.getChildren().clear();
+        welcomeSetup.getStyleClass().remove("setup-card");
+        if (activeModelId != null || modelHardware == null || modelPicker.getItems().isEmpty()) {
+            return;
+        }
+        String recommendedId = modelHardware.defaultModelId(modelPicker.getItems());
+        ModelOption recommended = modelPicker.getItems().stream()
+                .filter(option -> option.modelId().equals(recommendedId))
+                .findFirst()
+                .orElse(null);
+        if (recommended == null) {
+            return;
+        }
+        boolean installed = isModelInstalled(recommended.modelId());
+        Label title = new Label("Recommended for this PC: " + recommended.displayName());
+        title.getStyleClass().add("welcome-title");
+        Label detail = new Label("About " + Math.max(1, recommended.estimatedDownloadBytes() / (1024L * 1024 * 1024))
+                + " GB \u00b7 expected speed: " + modelHardware.speedEstimate(recommended));
+        detail.getStyleClass().add("welcome-subtitle");
+        Button action = new Button(installed ? "Start with " + recommended.displayName() : "Download recommended model");
+        action.getStyleClass().add("primary-button");
+        action.setOnAction(event -> {
+            if (modelSwitching) {
+                return;
+            }
+            updatingModelPicker = true;
+            modelPicker.setValue(recommended);
+            updatingModelPicker = false;
+            beginModelSwitch(recommended, installed);
+        });
+        if (!welcomeSetup.getStyleClass().contains("setup-card")) {
+            welcomeSetup.getStyleClass().add("setup-card");
+        }
+        welcomeSetup.getChildren().addAll(title, detail, action);
+    }
+
+    private void runSpeedTest(ModelOption option) {
+        if (option == null || modelSwitching) {
+            return;
+        }
+        appendChatNotice("Running a quick speed test on " + option.displayName() + "...");
+        controlExecutor.execute(() -> {
+            try {
+                com.localai.contracts.ModelSpeedResult result = apiClient.measureModelSpeed(option.modelId());
+                double tps = result.tokensPerSecond();
+                String verdict = tps >= 25 ? "Fast" : tps >= 10 ? "Okay" : "Slow";
+                String message = String.format("Speed test: %.0f tokens/s \u2014 %s.", tps, verdict);
+                if ("Slow".equals(verdict)) {
+                    message += " For faster replies, choose a smaller model from the dropdown.";
+                }
+                String shown = message;
+                Platform.runLater(() -> appendChatNotice(shown));
+            } catch (RuntimeException e) {
+                Platform.runLater(() -> appendChatNotice("Speed test failed: " + e.getMessage()));
+            }
+        });
     }
 
     private void showModelCatalog() {
@@ -825,6 +1087,19 @@ public class DesktopController extends Application {
         modelDirectoryField.setEditable(false);
         modelDirectoryField.setFocusTraversable(false);
         modelDirectoryField.getStyleClass().add("model-path-field");
+        java.nio.file.Path modelDirectory = java.nio.file.Path.of(modelDirectoryField.getText());
+        Button openModelFolder = new Button("Open folder");
+        openModelFolder.setOnAction(event -> {
+            try {
+                java.nio.file.Files.createDirectories(modelDirectory);
+                java.awt.Desktop.getDesktop().open(modelDirectory.toFile());
+            } catch (java.io.IOException | RuntimeException e) {
+                modelDirectoryField.setText("Could not open the folder: " + modelDirectory);
+            }
+        });
+        HBox pathRow = new HBox(8, modelDirectoryField, openModelFolder);
+        pathRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(modelDirectoryField, Priority.ALWAYS);
         Label guidance = new Label(
                 "Download to keep a model on this computer. Use selects it for chat. "
                         + "You can uninstall models that are not currently in use.");
@@ -838,7 +1113,7 @@ public class DesktopController extends Application {
         listScroll.setFitToWidth(true);
         listScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         listScroll.getStyleClass().add("model-library-scroll");
-        VBox content = new VBox(7, locationLabel, modelDirectoryField, guidance, listScroll);
+        VBox content = new VBox(7, locationLabel, pathRow, storageSummary, guidance, listScroll);
         content.getStyleClass().add("model-library-content");
         VBox.setVgrow(listScroll, Priority.ALWAYS);
         dialog.getDialogPane().setContent(content);
@@ -848,6 +1123,7 @@ public class DesktopController extends Application {
 
     private void refreshModelLibrary(Dialog<Void> dialog, VBox entries) {
         libraryProgressBars.clear();
+        libraryCancelButtons.clear();
         libraryProgressLabels.clear();
         Label loading = new Label("Loading configured models and checking local downloads...");
         loading.getStyleClass().add("library-empty-state");
@@ -860,6 +1136,21 @@ public class DesktopController extends Application {
                     if (!dialog.isShowing()) {
                         return;
                     }
+                    long usedBytes = installedModels.stream()
+                            .mapToLong(com.localai.contracts.ModelCatalogEntry::sizeBytes).sum();
+                    long freeBytes = 0;
+                    try {
+                        java.nio.file.Path root = applicationDataDirectory();
+                        while (root != null && !java.nio.file.Files.exists(root)) {
+                            root = root.getParent();
+                        }
+                        freeBytes = root == null ? 0 : java.nio.file.Files.getFileStore(root).getUsableSpace();
+                    } catch (java.io.IOException ignored) {
+                        // Free space is informational only.
+                    }
+                    storageSummary.setText(String.format(java.util.Locale.ROOT,
+                            "Models use %.1f GB  ·  %.1f GB free on this drive",
+                            usedBytes / 1073741824.0, freeBytes / 1073741824.0));
                     entries.getChildren().clear();
                     java.util.Set<String> installedIds = installedModels.stream()
                             .map(com.localai.contracts.ModelCatalogEntry::modelId)
@@ -884,7 +1175,9 @@ public class DesktopController extends Application {
                         String hardwareAdvisory = modelHardware == null
                                 ? "Hardware advisory unavailable"
                                 : modelHardware.advisory(option);
-                        Label advisory = new Label(hardwareAdvisory);
+                        Label advisory = new Label(modelHardware == null
+                                ? hardwareAdvisory
+                                : hardwareAdvisory + " \u00b7 " + modelHardware.speedEstimate(option) + " on this PC");
                         advisory.getStyleClass().add("model-advisory");
                         advisory.setWrapText(true);
                         Label badge = active ? modelBadge("In use", "badge-active")
@@ -924,7 +1217,13 @@ public class DesktopController extends Application {
                         uninstall.setManaged(installed);
                         uninstall.setDisable(modelSwitching);
                         uninstall.setOnAction(event -> uninstallModelFromLibrary(dialog, entries, option));
-                        HBox actions = new HBox(4, install, use, uninstall);
+                        Button cancelRow = new Button("Cancel download");
+                        cancelRow.getStyleClass().add("cancel-button");
+                        cancelRow.setVisible(false);
+                        cancelRow.setManaged(false);
+                        cancelRow.setOnAction(event -> cancelActiveDownload());
+                        libraryCancelButtons.put(option.modelId(), cancelRow);
+                        HBox actions = new HBox(4, install, use, uninstall, cancelRow);
                         actions.getStyleClass().add("model-library-actions");
                         HBox row = new HBox(8, modelDetails, actions);
                         row.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
@@ -975,6 +1274,9 @@ public class DesktopController extends Application {
     }
 
     private void installModelFromLibrary(Dialog<Void> dialog, VBox entries, ModelOption option) {
+        if (!confirmDownload(option)) {
+            return;
+        }
         if (modelHardware != null && !modelHardware.hasEnoughDisk(option)) {
             Alert warning = new Alert(Alert.AlertType.WARNING,
                     modelHardware.diskAdvisory(option) + ". Free disk space before downloading this model.",
@@ -988,6 +1290,11 @@ public class DesktopController extends Application {
         status.setText("Downloading " + option.displayName() + ". This may take a while...");
         ProgressBar rowProgress = libraryProgressBars.get(option.modelId());
         Label rowProgressLabel = libraryProgressLabels.get(option.modelId());
+        Button rowCancel = libraryCancelButtons.get(option.modelId());
+        if (rowCancel != null) {
+            rowCancel.setVisible(true);
+            rowCancel.setManaged(true);
+        }
         if (rowProgress != null) {
             rowProgress.setVisible(true);
             rowProgress.setManaged(true);
@@ -1060,7 +1367,7 @@ public class DesktopController extends Application {
                             .findFirst()
                             .orElse(null));
                     modelPicker.setPromptText(activeModelId == null
-                            ? "No model selected — choose one to start chatting"
+                            ? "Choose a model to start"
                             : "Select a local model");
                     updatingModelPicker = false;
                     updateModelAdvice(modelPicker.getValue());
@@ -1086,6 +1393,7 @@ public class DesktopController extends Application {
         progressModelId = modelId;
         downloadProgressRow.setVisible(true);
         downloadProgressRow.setManaged(true);
+        cancelDownloadButton.setDisable(false);
         modelDownloadProgressLabel.setText("Preparing " + modelId + "...");
         modelDownloadProgressBar.setProgress(-1);
         progressPolling = progressExecutor.scheduleWithFixedDelay(() -> {
@@ -1216,7 +1524,10 @@ public class DesktopController extends Application {
                     });
                 } catch (RuntimeException e) {
                     attachedDropboxKeys.remove(key);
-                    Platform.runLater(() -> appendChatNotice("Could not read " + file.name() + ": " + e.getMessage()));
+                    String reason = String.valueOf(e.getMessage()).contains("image_requires_vision_model")
+                            ? "images need a vision model. Pick one marked (vision) from the model list."
+                            : e.getMessage();
+                    Platform.runLater(() -> appendChatNotice("Could not read " + file.name() + ": " + reason));
                 }
             }
             if (editTarget != null && editReady) {
@@ -1225,7 +1536,11 @@ public class DesktopController extends Application {
                         ? " The file is Word, shown as Markdown: keep its structure and use the same Markdown "
                                 + "formatting (headings, **bold**, bullets, tables, <center>) so the styling is "
                                 + "preserved or improved as requested."
-                        : "";
+                        : editTarget.name().toLowerCase(java.util.Locale.ROOT).endsWith(".xlsx")
+                                ? " The file is Excel, shown as tab-separated rows per sheet: keep every \"## Sheet:\" "
+                                        + "heading and the same row and column positions, and only change the cells "
+                                        + "needed. Start a cell with = for a formula."
+                                : "";
                 return message + "\n\n(Dropbox file \"" + editTarget.name() + "\" is attached above. Reply with a "
                         + "one-sentence summary, then the COMPLETE updated file content inside a single fenced "
                         + "code block and nothing after it." + formatting + ")";
@@ -1234,6 +1549,17 @@ public class DesktopController extends Application {
             // Dropbox context is optional; the chat message is still sent without it.
         }
         return message;
+    }
+
+    private String speedSummary(long submittedNanos, long firstTokenNanos, int tokens) {
+        if (firstTokenNanos == 0 || tokens < 2) {
+            return "Connected";
+        }
+        long now = System.nanoTime();
+        double firstSeconds = (firstTokenNanos - submittedNanos) / 1e9;
+        double streamSeconds = Math.max(0.001, (now - firstTokenNanos) / 1e9);
+        return String.format(java.util.Locale.ROOT, "Connected · first word %.1fs · %.0f tokens/s",
+                firstSeconds, tokens / streamSeconds);
     }
 
     private void finishPendingDropboxEdit(java.util.UUID editedConversationId, String reply) {
@@ -1427,7 +1753,7 @@ public class DesktopController extends Application {
             submitMessage();
         });
         Label note = new Label("Edits never overwrite the original. The AI's version is saved as a new file "
-                + "such as name-edited.ext, then name-edited-2.ext. PDF and Excel files are read-only.");
+                + "such as name-edited.ext, then name-edited-2.ext. PDF and image files are read-only.");
         note.setWrapText(true);
         VBox content = new VBox(10, files, fileActions, note, instruction, new HBox(8, edit, result));
         content.setPadding(new Insets(8));
@@ -1517,6 +1843,9 @@ public class DesktopController extends Application {
         Label assistantMessage = appendChatMessage(
                 com.localai.contracts.MessageRole.ASSISTANT, "Waiting for the local model...");
         assistantMessage.getStyleClass().add("chat-assistant-pending");
+        long submittedNanos = System.nanoTime();
+        long[] firstTokenNanos = {0};
+        int[] tokenCount = {0};
         StringBuilder assistantStreamedText = new StringBuilder();
         java.util.concurrent.atomic.AtomicBoolean renderScheduled = new java.util.concurrent.atomic.AtomicBoolean();
         java.util.function.Consumer<Boolean> renderStreamedText = force -> {
@@ -1538,12 +1867,14 @@ public class DesktopController extends Application {
             }
             assistantMessage.setText(snapshot);
         };
+        boolean thinkingRequested = thinkingToggle.isVisible() && thinkingToggle.isSelected();
         startChatWarmupIndicator();
         cancelButton.setDisable(true);
         apiExecutor.execute(() -> {
             try {
                 String outgoingMessage = prepareDropboxContext(submittedConversationId, message);
-                apiClient.streamTurn(submittedConversationId, outgoingMessage, clientRequestId, event -> {
+                apiClient.streamTurn(submittedConversationId, outgoingMessage, clientRequestId,
+                        thinkingRequested, event -> {
                     switch (event.type()) {
                         case "turn.started" -> Platform.runLater(() -> {
                             activeTurnId = event.turnId();
@@ -1551,6 +1882,10 @@ public class DesktopController extends Application {
                         });
                         case "token.delta" -> {
                             String token = event.payload().getOrDefault("text", "");
+                            if (firstTokenNanos[0] == 0) {
+                                firstTokenNanos[0] = System.nanoTime();
+                            }
+                            tokenCount[0]++;
                             synchronized (assistantStreamedText) {
                                 assistantStreamedText.append(token);
                             }
@@ -1566,7 +1901,7 @@ public class DesktopController extends Application {
                                 assistantMessage.setText("The model returned an empty response.");
                                 assistantMessage.getStyleClass().remove("chat-assistant-pending");
                             }
-                            status.setText("Connected");
+                            status.setText(speedSummary(submittedNanos, firstTokenNanos[0], tokenCount[0]));
                             finishPendingDropboxEdit(submittedConversationId, assistantStreamedText.toString());
                             setConversationControlsDisabled(false);
                             cancelButton.setDisable(true);

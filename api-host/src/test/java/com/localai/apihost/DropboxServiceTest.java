@@ -85,7 +85,7 @@ class DropboxServiceTest {
         assertTrue(text.contains("## Sheet: Budget"));
         assertTrue(text.contains("Item\tCost"));
         assertTrue(text.contains("Pen\t\t4.5"));
-        assertTrue(!DropboxService.isEditable("budget.xlsx"));
+        assertTrue(DropboxService.isEditable("budget.xlsx"));
     }
 
     private static void put(ZipOutputStream zip, String name, String content) throws Exception {
@@ -168,5 +168,64 @@ class DropboxServiceTest {
         assertTrue(roundTrip.contains("<center># Jane Doe</center>"));
         assertTrue(roundTrip.contains("Seasoned *engineer* with **10 years** of work."));
         assertTrue(roundTrip.contains("| A | B |"));
+    }
+
+    @Test
+    void xlsxEditsKeepStylesAndFormulas() throws Exception {
+        byte[] original;
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+            org.apache.poi.ss.usermodel.Sheet sheet = workbook.createSheet("Budget");
+            org.apache.poi.ss.usermodel.Font bold = workbook.createFont();
+            bold.setBold(true);
+            org.apache.poi.ss.usermodel.CellStyle header = workbook.createCellStyle();
+            header.setFont(bold);
+            org.apache.poi.ss.usermodel.Row top = sheet.createRow(0);
+            top.createCell(0).setCellValue("Item");
+            top.createCell(1).setCellValue("Cost");
+            top.getCell(0).setCellStyle(header);
+            org.apache.poi.ss.usermodel.Row first = sheet.createRow(2);
+            first.createCell(0).setCellValue("Rent");
+            first.createCell(1).setCellValue(100);
+            org.apache.poi.ss.usermodel.Row total = sheet.createRow(3);
+            total.createCell(0).setCellValue("Total");
+            total.createCell(1).setCellFormula("B3");
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            workbook.write(bytes);
+            original = bytes.toByteArray();
+        }
+        DropboxService dropbox = new DropboxService(directory);
+        dropbox.add("budget.xlsx", original);
+        String text = dropbox.readText("budget.xlsx");
+        assertTrue(text.contains("## Sheet: Budget\nItem\tCost\n\nRent\t100"), text);
+
+        String edited = text.replaceAll("Rent\t100(\\.0)?", "Rent\t250\tNote").replace("Item\tCost", "Item\tCost\tNotes");
+        String name = dropbox.saveEditedCopy("budget.xlsx", edited);
+        assertEquals("budget-edited.xlsx", name);
+
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
+                Files.newInputStream(directory.resolve(name)))) {
+            org.apache.poi.ss.usermodel.Sheet sheet = workbook.getSheet("Budget");
+            assertTrue(workbook.getFontAt(sheet.getRow(0).getCell(0).getCellStyle().getFontIndex()).getBold());
+            assertEquals("Notes", sheet.getRow(0).getCell(2).getStringCellValue());
+            assertEquals(250.0, sheet.getRow(2).getCell(1).getNumericCellValue());
+            assertEquals("Note", sheet.getRow(2).getCell(2).getStringCellValue());
+            assertEquals("B3", sheet.getRow(3).getCell(1).getCellFormula());
+        }
+        assertEquals(original.length > 0, Files.size(directory.resolve("budget.xlsx")) > 0);
+    }
+
+    @Test
+    void imagesAreSupportedReadOnlyAndFoundByTheirContextMarker() {
+        DropboxService dropbox = new DropboxService(directory);
+        dropbox.add("receipt.png", new byte[] {1, 2, 3});
+        assertTrue(DropboxService.isImage("receipt.png"));
+        assertTrue(!DropboxService.isEditable("receipt.png"));
+        assertEquals(1, dropbox.list().size());
+
+        String context = dropbox.contextFor("receipt.png");
+        String prompt = "User: hi\n" + context + "\nUser: what is this?\nAssistant: ";
+        assertEquals(java.util.List.of("receipt.png"), DropboxService.imageNames(prompt));
+        assertEquals(3, dropbox.readImage("receipt.png").length);
+        assertThrows(DropboxService.DropboxException.class, () -> dropbox.readImage("notes.txt"));
     }
 }
