@@ -41,3 +41,18 @@ models:
     estimatedDownloadGb: 8
     recommendedVramGb: 12
     recommendedRamGb: 24
+  - id: gemma3:4b
+    displayName: Gemma 3 4B
+    estimatedDownloadGb: 3
+    recommendedVramGb: 4
+    recommendedRamGb: 8
+  - id: phi4-mini:latest
+    displayName: Phi-4 Mini 3.8B
+    estimatedDownloadGb: 3
+    recommendedVramGb: 4
+    recommendedRamGb: 8
+  - id: qwen2.5-coder:7b
+    displayName: Qwen2.5 Coder 7B
+    estimatedDownloadGb: 5
+    recommendedVramGb: 6
+    recommendedRamGb: 12

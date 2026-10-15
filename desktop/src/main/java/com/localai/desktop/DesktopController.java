@@ -63,12 +63,15 @@ public class DesktopController extends Application {
     private final Button memoryButton = new Button("Conversation memory");
     private final Button modelsButton = new Button("Model library");
     private final Button helpButton = new Button("Help");
-    private final javafx.scene.control.CheckBox thinkingToggle = new javafx.scene.control.CheckBox("Thinking");
+    private final ComboBox<String> thinkingToggle = new ComboBox<>();
     private final java.util.Map<String, Boolean> thinkingSupport = new java.util.concurrent.ConcurrentHashMap<>();
     private final Button webContextButton = new Button("Add web context");
     private final Button dropboxButton = new Button("Dropbox");
     private volatile String pendingEditFile;
     private final java.util.Set<String> attachedDropboxKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.List<String> pendingAttachments = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final javafx.scene.layout.FlowPane attachmentChips = new javafx.scene.layout.FlowPane(8, 8);
+    private final Button attachButton = new Button("\uD83D\uDCCE");
     private final ExecutorService apiExecutor = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "local-api-client");
         thread.setDaemon(true);
@@ -281,11 +284,13 @@ public class DesktopController extends Application {
             node.setVisible(false);
         }
         thinkingToggle.setTooltip(new javafx.scene.control.Tooltip(
-                "Let the model reason before answering. Better for hard problems, but replies start later."));
+                "Auto reasons only on hard questions (math, code, long prompts). On always reasons; Off never does. Reasoning is smarter but replies start later."));
         thinkingToggle.managedProperty().bind(thinkingToggle.visibleProperty());
         thinkingToggle.setVisible(false);
-        thinkingToggle.setSelected(java.nio.file.Files.exists(thinkingPreferenceFile()));
-        thinkingToggle.selectedProperty().addListener((observable, previous, selected) -> saveThinkingPreference(selected));
+        thinkingToggle.getItems().setAll("Thinking: Auto", "Thinking: On", "Thinking: Off");
+        thinkingToggle.setValue("Thinking: " + loadThinkingMode().label());
+        thinkingToggle.valueProperty().addListener((observable, previous, selected) -> saveThinkingMode(
+                ThinkingMode.fromLabel(selected == null ? null : selected.replace("Thinking:", ""))));
         HBox modelRow = new HBox(10, modelLabel, modelPicker, modelDownloadButton, modelInstalledBadge, modelAdvice,
                 thinkingToggle);
         modelRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
@@ -307,10 +312,38 @@ public class DesktopController extends Application {
         VBox header = new VBox(15, topBar, conversationRow, modelRow, toolsRow);
         header.getStyleClass().add("app-header");
 
-        HBox composer = new HBox(10, input, sendButton, cancelButton);
+        attachButton.getStyleClass().add("attach-button");
+        attachButton.setTooltip(new javafx.scene.control.Tooltip(
+                "Attach files for the AI to read (or drop them anywhere in this window)"));
+        attachButton.setOnAction(event -> {
+            javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
+            chooser.setTitle("Attach files");
+            List<java.io.File> picked = chooser.showOpenMultipleDialog(stage);
+            if (picked != null) {
+                attachFiles(picked);
+            }
+        });
+        attachmentChips.getStyleClass().add("attachment-chips");
+        attachmentChips.managedProperty().bind(attachmentChips.visibleProperty());
+        attachmentChips.setVisible(false);
+        HBox composer = new HBox(10, attachButton, input, sendButton, cancelButton);
         composer.getStyleClass().add("composer");
         HBox.setHgrow(input, Priority.ALWAYS);
-        VBox layout = new VBox(14, header, downloadProgressRow, transcriptScrollPane, composer);
+        VBox layout = new VBox(14, header, downloadProgressRow, transcriptScrollPane, attachmentChips, composer);
+        layout.setOnDragOver(event -> {
+            if (event.getDragboard().hasFiles() && conversationId != null) {
+                event.acceptTransferModes(javafx.scene.input.TransferMode.COPY);
+            }
+            event.consume();
+        });
+        layout.setOnDragDropped(event -> {
+            boolean hasFiles = event.getDragboard().hasFiles() && conversationId != null;
+            if (hasFiles) {
+                attachFiles(event.getDragboard().getFiles());
+            }
+            event.setDropCompleted(hasFiles);
+            event.consume();
+        });
         layout.getStyleClass().add("app-root");
         layout.setPadding(new Insets(20));
         VBox.setVgrow(transcriptScrollPane, Priority.ALWAYS);
@@ -516,6 +549,10 @@ public class DesktopController extends Application {
                         com.localai.contracts.TurnStatusResponse::userMessageId,
                         turn -> turn));
         for (com.localai.contracts.MessageRecord message : messages) {
+            if (message.role() == com.localai.contracts.MessageRole.USER && isAttachmentSource(message.content())) {
+                appendAttachmentCard(message.content());
+                continue;
+            }
             appendChatMessage(message.role(), message.content());
             if (message.role() == com.localai.contracts.MessageRole.USER) {
                 var turn = turnsByUserMessage.get(message.id());
@@ -559,6 +596,72 @@ public class DesktopController extends Application {
         row.getStyleClass().add("chat-message-row");
         transcript.getChildren().add(row);
         return message;
+    }
+
+    static boolean isAttachmentSource(String content) {
+        return content != null && (content.startsWith("[Dropbox file;") || content.startsWith("[Dropbox image;"));
+    }
+
+    private void appendAttachmentCard(String content) {
+        removeWelcome();
+        String name = "file";
+        for (String line : content.split("\n", 6)) {
+            if (line.startsWith("File: ")) {
+                name = line.substring(6).strip();
+                break;
+            }
+        }
+        boolean image = content.startsWith("[Dropbox image;");
+        boolean partial = content.contains("[Text truncated");
+        Label title = new Label((image ? "\uD83D\uDDBC  " : "\uD83D\uDCC4  ") + name);
+        title.getStyleClass().add("attachment-title");
+        Label detail = new Label(image ? "Image attached for the model to look at"
+                : partial ? "Long file \u00b7 the sections that best match your question were read"
+                : "Read in full \u00b7 " + String.format(java.util.Locale.ROOT, "%,d", content.length()) + " characters");
+        detail.getStyleClass().add("attachment-detail");
+        VBox card = new VBox(2, title, detail);
+        card.getStyleClass().add("attachment-card");
+        HBox row = new HBox(card);
+        row.setAlignment(Pos.CENTER_RIGHT);
+        row.getStyleClass().add("chat-message-row");
+        transcript.getChildren().add(row);
+    }
+
+    private void attachFiles(List<java.io.File> picked) {
+        if (conversationId == null || picked == null || picked.isEmpty()) {
+            return;
+        }
+        controlExecutor.execute(() -> {
+            for (java.io.File file : picked) {
+                try {
+                    var stored = apiClient.uploadDropboxFile(file.getName(), java.nio.file.Files.readAllBytes(file.toPath()));
+                    if (!pendingAttachments.contains(stored.name()) && pendingAttachments.size() < 5) {
+                        pendingAttachments.add(stored.name());
+                    }
+                    Platform.runLater(this::refreshAttachmentChips);
+                } catch (java.io.IOException | RuntimeException e) {
+                    Platform.runLater(() -> appendChatNotice("Could not attach " + file.getName() + ": " + e.getMessage()));
+                }
+            }
+        });
+    }
+
+    private void refreshAttachmentChips() {
+        attachmentChips.getChildren().clear();
+        for (String name : pendingAttachments) {
+            Label label = new Label("\uD83D\uDCC4 " + name);
+            Button remove = new Button("\u2715");
+            remove.getStyleClass().add("chip-remove");
+            remove.setOnAction(event -> {
+                pendingAttachments.remove(name);
+                refreshAttachmentChips();
+            });
+            HBox chip = new HBox(6, label, remove);
+            chip.setAlignment(Pos.CENTER_LEFT);
+            chip.getStyleClass().add("attachment-chip");
+            attachmentChips.getChildren().add(chip);
+        }
+        attachmentChips.setVisible(!pendingAttachments.isEmpty());
     }
 
     private void appendChatNotice(String text) {
@@ -835,23 +938,35 @@ public class DesktopController extends Application {
     }
 
     private static java.nio.file.Path thinkingPreferenceFile() {
-        return applicationDataDirectory().resolve("config").resolve("thinking.on");
+        return applicationDataDirectory().resolve("config").resolve("thinking.mode");
     }
 
-    private void saveThinkingPreference(boolean enabled) {
+    private static ThinkingMode loadThinkingMode() {
         try {
             java.nio.file.Path file = thinkingPreferenceFile();
-            if (enabled) {
-                java.nio.file.Files.createDirectories(file.getParent());
-                java.nio.file.Files.writeString(file, "on");
-            } else {
-                java.nio.file.Files.deleteIfExists(file);
+            if (java.nio.file.Files.exists(file)) {
+                return ThinkingMode.fromLabel(java.nio.file.Files.readString(file));
+            }
+            // Older versions stored an "on" marker file.
+            if (java.nio.file.Files.exists(file.resolveSibling("thinking.on"))) {
+                return ThinkingMode.ON;
             }
         } catch (java.io.IOException e) {
-            // The switch still works for this session if the preference cannot be saved.
+            // Fall back to the default.
         }
+        return ThinkingMode.AUTO;
     }
 
+    private void saveThinkingMode(ThinkingMode mode) {
+        try {
+            java.nio.file.Path file = thinkingPreferenceFile();
+            java.nio.file.Files.createDirectories(file.getParent());
+            java.nio.file.Files.writeString(file, mode.label());
+            java.nio.file.Files.deleteIfExists(file.resolveSibling("thinking.on"));
+        } catch (java.io.IOException e) {
+            // The choice still applies for this session if it cannot be saved.
+        }
+    }
     private void refreshThinkingSupport() {
         String modelId = activeModelId;
         if (modelId == null) {
@@ -1489,7 +1604,16 @@ public class DesktopController extends Application {
     private String prepareDropboxContext(java.util.UUID targetConversationId, String message) {
         pendingEditFile = null;
         try {
-            List<LocalApiClient.DropboxFile> mentioned = mentionedFiles(message, apiClient.listDropboxFiles());
+            List<LocalApiClient.DropboxFile> listing = apiClient.listDropboxFiles();
+            List<LocalApiClient.DropboxFile> mentioned = new java.util.ArrayList<>(mentionedFiles(message, listing));
+            java.util.Set<String> explicit = new java.util.HashSet<>(pendingAttachments);
+            for (LocalApiClient.DropboxFile file : listing) {
+                if (explicit.contains(file.name()) && mentioned.stream().noneMatch(m -> m.name().equals(file.name()))) {
+                    mentioned.add(file);
+                }
+            }
+            pendingAttachments.removeAll(explicit);
+            Platform.runLater(this::refreshAttachmentChips);
             if (mentioned.isEmpty()) {
                 return message;
             }
@@ -1502,11 +1626,11 @@ public class DesktopController extends Application {
             for (LocalApiClient.DropboxFile file : mentioned) {
                 String key = targetConversationId + ":" + file.name() + ":" + file.sizeBytes();
                 boolean isEditTarget = file == editTarget;
-                if (!isEditTarget && !attachedDropboxKeys.add(key)) {
+                if (!isEditTarget && !attachedDropboxKeys.add(key) && !explicit.contains(file.name())) {
                     continue;
                 }
                 try {
-                    var sources = apiClient.addDropboxContext(targetConversationId, List.of(file.name()));
+                    var sources = apiClient.addDropboxContext(targetConversationId, List.of(file.name()), message);
                     attachedDropboxKeys.add(key);
                     boolean truncated = sources.stream().anyMatch(source -> source.content().contains("[Text truncated"));
                     if (isEditTarget) {
@@ -1514,8 +1638,7 @@ public class DesktopController extends Application {
                     }
                     Platform.runLater(() -> {
                         for (var source : sources) {
-                            appendChatMessage(com.localai.contracts.MessageRole.ASSISTANT,
-                                    "Dropbox file\n" + source.content()).getStyleClass().add("chat-source-message");
+                            appendAttachmentCard(source.content());
                         }
                         if (isEditTarget && truncated) {
                             appendChatNotice(file.name() + " is too long to edit safely in one pass; "
@@ -1606,7 +1729,7 @@ public class DesktopController extends Application {
         Dialog<Void> dialog = new Dialog<>();
         applyDialogStyles(dialog);
         dialog.setTitle("Dropbox");
-        dialog.setHeaderText("Drop files here, then mention a file by name in the chat and the AI will read it. "
+        dialog.setHeaderText("Add files here (or use the paperclip next to the message box, or drop files on the window). Mention a file by name, or attach it, and the AI will read it. "
                 + "Ask it to edit the file and it saves an edited copy.");
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         javafx.scene.control.ListView<LocalApiClient.DropboxFile> files = new javafx.scene.control.ListView<>();
@@ -1712,8 +1835,7 @@ public class DesktopController extends Application {
                     attachedDropboxKeys.add(selectedConversationId + ":" + selected.name() + ":" + selected.sizeBytes());
                     Platform.runLater(() -> {
                         for (var source : sources) {
-                            appendChatMessage(com.localai.contracts.MessageRole.ASSISTANT,
-                                    "Dropbox file\n" + source.content()).getStyleClass().add("chat-source-message");
+                            appendAttachmentCard(source.content());
                         }
                         result.setText("Added " + selected.name() + " to this conversation.");
                     });
@@ -1867,7 +1989,9 @@ public class DesktopController extends Application {
             }
             assistantMessage.setText(snapshot);
         };
-        boolean thinkingRequested = thinkingToggle.isVisible() && thinkingToggle.isSelected();
+        boolean thinkingRequested = thinkingToggle.isVisible()
+                && ThinkingMode.fromLabel(String.valueOf(thinkingToggle.getValue()).replace("Thinking:", ""))
+                        .shouldThink(message);
         startChatWarmupIndicator();
         cancelButton.setDisable(true);
         apiExecutor.execute(() -> {

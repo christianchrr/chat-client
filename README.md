@@ -30,16 +30,16 @@ This is for someone who has downloaded the project source code. Building require
 3. When the build finishes, start the app:
 
    ```powershell
-   & ".\product-launcher\target\package-0.1.39\LocalAIAssistant\LocalAIAssistant.exe"
+   & ".\product-launcher\target\package-0.1.41\LocalAIAssistant\LocalAIAssistant.exe"
    ```
 
 The build may take a few minutes. If PowerShell says it cannot find `jpackage`, install JDK 21 and
 try again. The app is created in
-`product-launcher\target\package-0.1.39\LocalAIAssistant`. Keep that entire folder together.
+`product-launcher\target\package-0.1.41\LocalAIAssistant`. Keep that entire folder together.
 
 ### Make an installer to share
 
-The build also creates `LocalAIAssistant-0.1.39.exe` and `.msi` installers next to the app folder. They
+The build also creates `LocalAIAssistant-0.1.41.exe` and `.msi` installers next to the app folder. They
 install to `C:\Program Files\LocalAIAssistantApp` (64-bit app; Windows asks for administrator approval), add a Start Menu entry and an optional desktop shortcut,
 and appear under Windows **Settings > Apps** so they can be uninstalled. Uninstalling removes the program and also deletes all chats, models and Dropbox files in
 `%LOCALAPPDATA%\LocalAIAssistant`; close the app first. Upgrading to a newer installer keeps them. Send the `.exe`
@@ -79,7 +79,7 @@ skip installers. The installers are not code-signed, so Windows SmartScreen show
   exact local model storage path. You may uninstall the selected model; if you remove it, chat is
   disabled until you select another model, and that empty selection is remembered across restarts.
 
-The Model library shows the model folder (with an **Open folder** button), how much space models use and how much is free. A running download can be cancelled; downloading again resumes it. Replies run with thinking off by default and a fixed 8,192-token context so the model loads once and stays fully in GPU memory; models that can reason (such as Qwen3) show a **Thinking** checkbox next to the model list; turn it on for hard problems, at the cost of a slower start (your choice is remembered). The status bar shows the time to first word and tokens per second after each reply. **Help** in the tool row opens the logs folder or copies diagnostics (OS, Java, models, recent log lines) to the clipboard; review them before sharing. **Help > Test model speed** measures tokens per second. Each model shows a Fast/Okay/Slow estimate for this PC, and the first-run welcome card offers a one-click download of the recommended model (the best fit for your RAM, GPU and disk; vision models are never the default). After a first download finishes, a quick speed test result appears in the chat.
+The Model library shows the model folder (with an **Open folder** button), how much space models use and how much is free. A running download can be cancelled; downloading again resumes it. Replies run with thinking off by default and a fixed 8,192-token context so the model loads once and stays fully in GPU memory; models that can reason (such as Qwen3) show a **Thinking** menu next to the model list: **Auto** (default) reasons only on hard questions such as math, code or long prompts, **On** always reasons and **Off** never does (your choice is remembered). The context window is sized to your RAM (4,096 tokens up to 12 GB, 8,192 up to 48 GB, 16,384 above; override with `local.ai.model.num-ctx`) and the model cache is stored at 8-bit (`OLLAMA_KV_CACHE_TYPE=q8_0`), which roughly halves its memory with little quality loss. The status bar shows the time to first word and tokens per second after each reply. **Help** in the tool row opens the logs folder or copies diagnostics (OS, Java, models, recent log lines) to the clipboard; review them before sharing. **Help > Test model speed** measures tokens per second. Each model shows a Fast/Okay/Slow estimate for this PC, and the first-run welcome card offers a one-click download of the recommended model (the best fit for your RAM, GPU and disk; vision models are never the default). After a first download finishes, a quick speed test result appears in the chat.
 
 The editable model allow-list is created on first launch at
 `%LOCALAPPDATA%\LocalAIAssistant\config\models.yml`. To add a model, add another entry under

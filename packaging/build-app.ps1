@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$version = "0.1.39"
+$version = "0.1.41"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $javaHome = $env:JAVA_HOME

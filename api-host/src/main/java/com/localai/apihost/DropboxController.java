@@ -23,7 +23,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1")
 public class DropboxController {
-    public record DropboxContextRequest(List<String> names) {
+    public record DropboxContextRequest(List<String> names, String query) {
     }
 
     public record DropboxEditRequest(String content) {
@@ -93,7 +93,8 @@ public class DropboxController {
             return ResponseEntity.badRequest().body(Map.of("error", "image_requires_vision_model"));
         }
         try {
-            List<String> sources = request.names().stream().map(dropbox::contextFor).toList();
+            List<String> sources = request.names().stream()
+                    .map(name -> dropbox.contextFor(name, request.query())).toList();
             List<MessageRecord> saved = sources.stream()
                     .map(source -> conversationStore.appendMessage(conversationId, MessageRole.USER, source))
                     .toList();

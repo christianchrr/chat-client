@@ -31,7 +31,8 @@ public class LocalApiConfiguration {
             @Value("${local.ai.ollama.base-url:http://127.0.0.1:11434}") String baseUrl,
             @Value("${local.ai.model.id:qwen3:30b}") String defaultModelId,
             @Value("${local.ai.model.catalog.path:}") String catalogPath,
-            @Value("${local.ai.model.selection.path:${user.home}/.localai/selected-model.txt}") String selectionPath) {
+            @Value("${local.ai.model.selection.path:${user.home}/.localai/selected-model.txt}") String selectionPath,
+            @Value("${local.ai.model.num-ctx:0}") int configuredNumCtx) {
         java.util.List<com.localai.contracts.ModelOption> modelOptions;
         try {
             modelOptions = catalogPath.isBlank()
@@ -40,12 +41,32 @@ public class LocalApiConfiguration {
         } catch (java.io.IOException e) {
             throw new IllegalStateException("Could not load the local model allow-list configuration.", e);
         }
-        return new OllamaGenerationService(
+        OllamaGenerationService service = new OllamaGenerationService(
                 URI.create(baseUrl),
                 java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(2)).build(),
                 defaultModelId,
                 modelOptions,
                 Path.of(selectionPath));
+        service.setNumCtx(configuredNumCtx > 0 ? configuredNumCtx : contextForMemory(systemMemoryBytes()));
+        return service;
+    }
+
+    /** Low-memory PCs get a smaller context so the model and its cache stay in memory; strong PCs get more. */
+    static int contextForMemory(long ramBytes) {
+        long gib = ramBytes / (1024L * 1024 * 1024);
+        if (gib <= 12) {
+            return 4096;
+        }
+        return gib >= 48 ? 16384 : 8192;
+    }
+
+    private static long systemMemoryBytes() {
+        try {
+            return ((com.sun.management.OperatingSystemMXBean)
+                    java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getTotalMemorySize();
+        } catch (RuntimeException | LinkageError e) {
+            return 16L * 1024 * 1024 * 1024;
+        }
     }
 
     @Bean

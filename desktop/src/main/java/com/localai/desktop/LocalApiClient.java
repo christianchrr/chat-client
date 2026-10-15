@@ -194,9 +194,16 @@ public final class LocalApiClient {
     }
 
     public List<MessageRecord> addDropboxContext(UUID conversationId, List<String> names) {
+        return addDropboxContext(conversationId, names, null);
+    }
+
+    public List<MessageRecord> addDropboxContext(UUID conversationId, List<String> names, String query) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("names", names);
+        body.put("query", query);
         MessageRecord[] sources = send(
                 "POST", "/api/v1/conversations/" + conversationId + "/dropbox-context",
-                java.util.Map.of("names", names), MessageRecord[].class);
+                body, MessageRecord[].class);
         return List.copyOf(Arrays.asList(sources));
     }
 

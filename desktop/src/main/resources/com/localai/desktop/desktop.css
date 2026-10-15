@@ -756,3 +756,63 @@
 .check-box .label {
     -fx-text-fill: -c-text-2;
 }
+/* Attachments */
+.attach-button {
+    -fx-background-color: transparent;
+    -fx-background-radius: 18px;
+    -fx-font-size: 16px;
+    -fx-padding: 6px 9px;
+}
+
+.attach-button:hover {
+    -fx-background-color: -c-accent-soft;
+}
+
+.attachment-chips {
+    -fx-padding: 0 6px;
+}
+
+.attachment-chip {
+    -fx-background-color: -c-accent-soft;
+    -fx-background-radius: 20px;
+    -fx-border-color: -c-accent-line;
+    -fx-border-radius: 20px;
+    -fx-padding: 4px 6px 4px 12px;
+}
+
+.attachment-chip .label {
+    -fx-text-fill: -c-accent-text;
+    -fx-font-size: 12px;
+    -fx-font-weight: 600;
+}
+
+.chip-remove {
+    -fx-background-color: transparent;
+    -fx-background-radius: 20px;
+    -fx-font-size: 10px;
+    -fx-padding: 3px 6px;
+    -fx-text-fill: -c-accent-text;
+}
+
+.chip-remove:hover {
+    -fx-background-color: -c-accent-line;
+}
+
+.attachment-card {
+    -fx-background-color: -c-card;
+    -fx-background-radius: 14px;
+    -fx-border-color: -c-accent-line;
+    -fx-border-radius: 14px;
+    -fx-padding: 9px 14px;
+}
+
+.attachment-title {
+    -fx-font-size: 13px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -c-text;
+}
+
+.attachment-detail {
+    -fx-font-size: 11px;
+    -fx-text-fill: -c-muted;
+}

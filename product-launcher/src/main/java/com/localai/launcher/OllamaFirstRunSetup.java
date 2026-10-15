@@ -517,6 +517,7 @@ public final class OllamaFirstRunSetup {
         builder.environment().put("OLLAMA_MODELS", modelDirectory.toString());
         builder.environment().put("OLLAMA_NO_CLOUD", "1");
         builder.environment().put("OLLAMA_FLASH_ATTENTION", "1");
+        builder.environment().put("OLLAMA_KV_CACHE_TYPE", "q8_0");
         builder.environment().put("OLLAMA_MAX_LOADED_MODELS", "1");
         builder.environment().put("OLLAMA_NUM_PARALLEL", "1");
         return builder.start();

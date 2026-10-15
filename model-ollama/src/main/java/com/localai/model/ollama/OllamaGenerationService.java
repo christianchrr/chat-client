@@ -51,7 +51,8 @@ public final class OllamaGenerationService
     private final AtomicReference<String> activeModelId;
     private final ConcurrentHashMap<String, ModelDownloadProgress> downloadProgress = new ConcurrentHashMap<>();
     /** Fixed so the model is loaded once and stays in VRAM instead of being resized per request. */
-    private static final int NUM_CTX = 8192;
+    private static final int DEFAULT_NUM_CTX = 8192;
+    private volatile int numCtx = DEFAULT_NUM_CTX;
     private final ConcurrentHashMap<String, Boolean> visionSupport = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, InputStream> activePulls = new ConcurrentHashMap<>();
     private final java.util.Set<String> cancelledPulls = ConcurrentHashMap.newKeySet();
@@ -93,6 +94,13 @@ public final class OllamaGenerationService
             throw new IllegalArgumentException("Default model must be included in the configured model allow-list");
         }
         this.activeModelId = new AtomicReference<>(selected);
+    }
+
+    /** Context window in tokens; smaller on low-memory PCs so the model stays fully in memory. */
+    public void setNumCtx(int tokens) {
+        if (tokens >= 1024) {
+            this.numCtx = tokens;
+        }
     }
 
     @Override
@@ -149,7 +157,7 @@ public final class OllamaGenerationService
                 var preload = objectMapper.createObjectNode()
                         .put("model", modelId)
                         .put("keep_alive", "30m");
-                preload.putObject("options").put("num_ctx", NUM_CTX);
+                preload.putObject("options").put("num_ctx", numCtx);
                 String body = preload.toString();
                 HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/generate"))
                         .header("Content-Type", "application/json")
@@ -195,7 +203,7 @@ public final class OllamaGenerationService
             if (supportsThinking(modelId)) {
                 generation.put("think", false);
             }
-            generation.putObject("options").put("num_ctx", NUM_CTX).put("num_predict", 64);
+            generation.putObject("options").put("num_ctx", numCtx).put("num_predict", 64);
             HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/generate"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(generation.toString()))
@@ -601,7 +609,7 @@ public final class OllamaGenerationService
             if (supportsThinking(modelId)) {
                 generation.put("think", thinking);
             }
-            generation.putObject("options").put("num_ctx", NUM_CTX);
+            generation.putObject("options").put("num_ctx", numCtx);
             if (imagesBase64 != null && !imagesBase64.isEmpty()) {
                 var images = generation.putArray("images");
                 imagesBase64.forEach(images::add);

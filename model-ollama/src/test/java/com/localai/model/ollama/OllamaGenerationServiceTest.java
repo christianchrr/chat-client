@@ -153,7 +153,7 @@ class OllamaGenerationServiceTest {
             org.junit.jupiter.api.Assertions.assertThrows(
                     ModelSelectionException.class, () -> service.selectModel("qwen3:235b"));
             assertEquals(List.of("llama3.2:latest", "qwen3:4b", "qwen3:8b", "qwen3:14b", "qwen3:30b", "qwen3:32b",
-                "qwen2.5vl:7b", "llama3.2-vision:11b"),
+                "qwen2.5vl:7b", "llama3.2-vision:11b", "gemma3:4b", "phi4-mini:latest", "qwen2.5-coder:7b"),
                     options.stream().map(option -> option.modelId()).toList());
             assertTrue(options.getFirst().estimatedDownloadBytes() < options.get(1).estimatedDownloadBytes());
         } finally {
