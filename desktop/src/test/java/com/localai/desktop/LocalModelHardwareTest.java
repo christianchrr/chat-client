@@ -35,4 +35,11 @@ class LocalModelHardwareTest {
         assertEquals("qwen3:14b", hardware.defaultModelId(options));
         assertTrue(hardware.advisory(options.getFirst()).contains("not detected"));
     }
+
+    @Test
+    void parsesLargestAdapterMemoryFromWindowsRegistryOutput() {
+        assertEquals(OptionalLong.of(25757220864L),
+                LocalModelHardware.parseAdapterMemory("536870912\r\n25757220864\r\n"));
+        assertEquals(OptionalLong.empty(), LocalModelHardware.parseAdapterMemory("error\r\n"));
+    }
 }

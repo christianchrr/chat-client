@@ -30,12 +30,12 @@ This is for someone who has downloaded the project source code. Building require
 3. When the build finishes, start the app:
 
    ```powershell
-   & ".\product-launcher\target\package-0.1.15\LocalAIAssistant\LocalAIAssistant.exe"
+   & ".\product-launcher\target\package-0.1.20\LocalAIAssistant\LocalAIAssistant.exe"
    ```
 
 The build may take a few minutes. If PowerShell says it cannot find `jpackage`, install JDK 21 and
 try again. The app is created in
-`product-launcher\target\package-0.1.15\LocalAIAssistant`. Keep that entire folder together.
+`product-launcher\target\package-0.1.20\LocalAIAssistant`. Keep that entire folder together.
 
 ## Use the app
 
@@ -46,9 +46,10 @@ try again. The app is created in
 - **Conversations:** the list uses the opening message as a title (up to eight words). Choose
   **New chat** to start another conversation or **Delete chat** to permanently remove the selected
   conversation and its messages. An active conversation cannot be deleted until its response ends.
-- **Add web information:** choose **Add web context**, paste up to five public web-page URLs (one
-  per line), and choose **Fetch and add**. The page text is added to the current chat; then ask the
-  assistant about it.
+- **Add web information:** choose **Add web context**, paste up to five public links (one per line), and choose **Fetch and add**. Web pages, PDFs
+  (first 50 pages), Word `.docx` files, and text files (txt, md, csv, json, xml, yaml) are
+  supported, up to 10 MB each. The extracted text is added to the current chat (long documents are
+  truncated to fit the model); then ask the assistant about it.
 - **Conversation memory:** optionally create and manage a summary of older messages.
 - **Choose a model:** use the **Model** dropdown. It shows the hardware advisory and disk space
   estimate for each option. Choosing a model downloads it if needed, then uses it for chat. Your
@@ -76,7 +77,7 @@ fetch pages on your computer or private network.
 
 On first launch, setup downloads the Ollama runtime and the model best suited to the computer.
 The starter `models.yml` offers Llama 3.2 3B (about 2 GB) and Qwen3 14B (about 10 GB), 30B (about
-20 GB), and 32B (about 21 GB); actual download sizes vary. The app checks system memory, NVIDIA GPU
+20 GB), and 32B (about 21 GB); actual download sizes vary. The app checks system memory, GPU (NVIDIA, AMD, or Intel)
 memory when available, and free disk space to choose a default and show warnings. On a 24 GB RTX
 4090 with 64 GB of RAM, it selects Qwen3 30B. Selecting another model downloads it once; installed
 models are reused. Setup verifies the runtime download before installing it and shows download

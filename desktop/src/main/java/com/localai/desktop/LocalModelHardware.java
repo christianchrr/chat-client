@@ -45,7 +45,7 @@ public record LocalModelHardware(
         } catch (IOException | SecurityException e) {
             diskKnown = false;
         }
-        return new LocalModelHardware(ram, detectNvidiaVram(), disk, diskKnown);
+        return new LocalModelHardware(ram, detectGpuVram(), disk, diskKnown);
     }
 
     public String advisory(ModelOption option) {
@@ -98,6 +98,62 @@ public record LocalModelHardware(
         String gpu = gpuVramBytes.isPresent() ? gibibytes(gpuVramBytes.getAsLong()) + " GB VRAM" : "GPU VRAM unknown";
         String disk = freeDiskKnown ? gibibytes(freeDiskBytes) + " GB free disk" : "free disk unknown";
         return gibibytes(systemRamBytes) + " GB RAM, " + gpu + ", " + disk;
+    }
+
+    private static OptionalLong detectGpuVram() {
+        OptionalLong nvidia = detectNvidiaVram();
+        OptionalLong windows = detectWindowsAdapterVram();
+        if (nvidia.isEmpty()) {
+            return windows;
+        }
+        if (windows.isEmpty()) {
+            return nvidia;
+        }
+        return OptionalLong.of(Math.max(nvidia.getAsLong(), windows.getAsLong()));
+    }
+
+    private static OptionalLong detectWindowsAdapterVram() {
+        if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")) {
+            return OptionalLong.empty();
+        }
+        String script = "Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\"
+                + "{4d36e968-e325-11ce-bfc1-08002be10318}\\0*' -ErrorAction SilentlyContinue | "
+                + "ForEach-Object { $v = $_.'HardwareInformation.qwMemorySize'; "
+                + "if ($null -ne $v) { if ($v -is [byte[]]) { $v = [BitConverter]::ToUInt64($v,0) }; $v } }";
+        Process process = null;
+        try {
+            process = new ProcessBuilder(
+                    "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+                    .redirectErrorStream(true)
+                    .start();
+            if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return OptionalLong.empty();
+            }
+            if (process.exitValue() != 0) {
+                return OptionalLong.empty();
+            }
+            return parseAdapterMemory(new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            return OptionalLong.empty();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return OptionalLong.empty();
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
+    static OptionalLong parseAdapterMemory(String output) {
+        long max = output.lines()
+                .map(String::trim)
+                .filter(line -> line.matches("\\d{1,18}"))
+                .mapToLong(Long::parseLong)
+                .max()
+                .orElse(0);
+        return max > 0 ? OptionalLong.of(max) : OptionalLong.empty();
     }
 
     private static OptionalLong detectNvidiaVram() {

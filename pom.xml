@@ -35,6 +35,7 @@
         <junit.version>5.10.3</junit.version>
         <archunit.version>1.2.1</archunit.version>
         <jsoup.version>1.18.1</jsoup.version>
+        <pdfbox.version>3.0.3</pdfbox.version>
     </properties>
 
     <dependencyManagement>
@@ -71,6 +72,11 @@
                 <groupId>org.jsoup</groupId>
                 <artifactId>jsoup</artifactId>
                 <version>${jsoup.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>pdfbox</artifactId>
+                <version>${pdfbox.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

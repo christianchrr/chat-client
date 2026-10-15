@@ -69,6 +69,7 @@ public class DesktopController extends Application {
         return thread;
     });
     private LocalApiClient apiClient;
+    private VBox welcomeCard;
     private java.util.UUID conversationId;
     private volatile java.util.UUID activeTurnId;
     private boolean updatingConversationPicker;
@@ -126,7 +127,7 @@ public class DesktopController extends Application {
         modelsButton.setTooltip(new javafx.scene.control.Tooltip("Install, select, or uninstall local models"));
         modelsButton.getStyleClass().add("secondary-button");
         webContextButton.setText("Web context");
-        webContextButton.setTooltip(new javafx.scene.control.Tooltip("Add information from public web pages"));
+        webContextButton.setTooltip(new javafx.scene.control.Tooltip("Add information from public web pages and documents"));
         webContextButton.getStyleClass().add("secondary-button");
         conversationPicker.setPromptText("Select a conversation");
         conversationPicker.setMaxWidth(Double.MAX_VALUE);
@@ -281,10 +282,15 @@ public class DesktopController extends Application {
         apiExecutor.execute(() -> {
             try {
                 List<com.localai.contracts.ConversationRecord> conversations = apiClient.listConversations();
-                var conversationsToShow = conversations.isEmpty()
-                        ? List.of(apiClient.createConversation("Empty conversation"))
-                        : conversations;
-                var selected = conversationsToShow.get(conversationsToShow.size() - 1);
+                var conversationsToShow = conversations;
+                boolean reuseLatest = !conversations.isEmpty()
+                        && apiClient.listMessages(conversations.getLast().id()).isEmpty();
+                if (!reuseLatest) {
+                    apiClient.createConversation("Empty conversation");
+                    conversationsToShow = apiClient.listConversations();
+                }
+                var shownConversations = conversationsToShow;
+                var selected = shownConversations.get(shownConversations.size() - 1);
                 var messages = apiClient.listMessages(selected.id());
                 var turns = apiClient.listTurns(selected.id());
                 RecoveryDetails recoveryDetails = loadRecoveryDetails(turns);
@@ -293,7 +299,7 @@ public class DesktopController extends Application {
                 List<com.localai.contracts.ModelCatalogEntry> installedModels = apiClient.listAvailableModels();
                 LocalModelHardware hardware = LocalModelHardware.detect(applicationDataDirectory());
                 Platform.runLater(() -> {
-                    setConversations(conversationsToShow, selected);
+                    setConversations(shownConversations, selected);
                     showConversation(selected, messages, turns, recoveryDetails);
                     configureModelPicker(options, selection, installedModels, hardware);
                     status.setText(activeModelId == null ? "Connected — no model selected" : "Connected");
@@ -376,11 +382,13 @@ public class DesktopController extends Application {
             return;
         }
         Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+        applyDialogStyles(confirmation);
         confirmation.setTitle("Delete conversation");
         confirmation.setHeaderText("Delete \"" + selected.title() + "\"?");
         confirmation.setContentText("This permanently deletes the conversation and its messages.");
-        confirmation.getButtonTypes().setAll(ButtonType.CANCEL, ButtonType.OK);
-        if (confirmation.showAndWait().filter(ButtonType.OK::equals).isEmpty()) {
+        ButtonType deleteButton = new ButtonType("Delete", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
+        confirmation.getButtonTypes().setAll(ButtonType.CANCEL, deleteButton);
+        if (confirmation.showAndWait().filter(deleteButton::equals).isEmpty()) {
             return;
         }
         setConversationControlsDisabled(true);
@@ -390,21 +398,16 @@ public class DesktopController extends Application {
                 apiClient.deleteConversation(selected.id());
                 List<com.localai.contracts.ConversationRecord> conversations = apiClient.listConversations();
                 if (conversations.isEmpty()) {
-                    Platform.runLater(() -> {
-                        setConversations(List.of(), null);
-                        conversationId = null;
-                        transcript.getChildren().clear();
-                        status.setText("Conversation deleted — start a new chat when ready");
-                        setConversationControlsDisabled(false);
-                    });
-                    return;
+                    apiClient.createConversation("Empty conversation");
+                    conversations = apiClient.listConversations();
                 }
+                var finalConversations = conversations;
                 var nextConversation = conversations.getLast();
                 var messages = apiClient.listMessages(nextConversation.id());
                 var turns = apiClient.listTurns(nextConversation.id());
                 RecoveryDetails recoveryDetails = loadRecoveryDetails(turns);
                 Platform.runLater(() -> {
-                    setConversations(conversations, nextConversation);
+                    setConversations(finalConversations, nextConversation);
                     showConversation(nextConversation, messages, turns, recoveryDetails);
                     status.setText("Connected");
                     setConversationControlsDisabled(false);
@@ -426,6 +429,11 @@ public class DesktopController extends Application {
             RecoveryDetails recoveryDetails) {
         conversationId = conversation.id();
         transcript.getChildren().clear();
+        welcomeCard = null;
+        if (messages.isEmpty()) {
+            showWelcome();
+            return;
+        }
         java.util.Map<java.util.UUID, com.localai.contracts.TurnStatusResponse> turnsByUserMessage =
                 turns.stream().collect(java.util.stream.Collectors.toMap(
                         com.localai.contracts.TurnStatusResponse::userMessageId,
@@ -459,6 +467,7 @@ public class DesktopController extends Application {
     }
 
     private Label appendChatMessage(com.localai.contracts.MessageRole role, String text) {
+        removeWelcome();
         Label message = new Label(text);
         message.setWrapText(true);
         message.setMaxWidth(720);
@@ -708,6 +717,50 @@ public class DesktopController extends Application {
         }
         dialog.getDialogPane().getStylesheets().add(stylesheet.toExternalForm());
         dialog.getDialogPane().getStyleClass().add("app-dialog");
+        dialog.setGraphic(null);
+    }
+
+    private Label modelBadge(String text, String styleClass) {
+        Label badge = new Label(text);
+        badge.getStyleClass().addAll("badge", styleClass);
+        return badge;
+    }
+
+    private void removeWelcome() {
+        if (welcomeCard != null) {
+            transcript.getChildren().remove(welcomeCard);
+            welcomeCard = null;
+        }
+    }
+
+    private void showWelcome() {
+        Label heading = new Label("How can I help today?");
+        heading.getStyleClass().add("welcome-title");
+        Label subtitle = new Label("Ask anything. Your conversations and models stay on this computer.");
+        subtitle.getStyleClass().add("welcome-subtitle");
+        subtitle.setWrapText(true);
+        subtitle.setTextAlignment(javafx.scene.text.TextAlignment.CENTER);
+        HBox suggestions = new HBox(8);
+        suggestions.setAlignment(Pos.CENTER);
+        for (String suggestion : List.of(
+                "Explain something in simple terms",
+                "Help me write an email",
+                "Summarize a document link")) {
+            Button chip = new Button(suggestion);
+            chip.getStyleClass().add("suggestion-chip");
+            chip.setOnAction(event -> {
+                input.setText(suggestion.startsWith("Summarize") ? "Summarize this: " : suggestion + ": ");
+                input.requestFocus();
+                input.positionCaret(input.getText().length());
+            });
+            suggestions.getChildren().add(chip);
+        }
+        VBox card = new VBox(10, heading, subtitle, suggestions);
+        card.setAlignment(Pos.CENTER);
+        card.getStyleClass().add("welcome-card");
+        card.setMaxWidth(Double.MAX_VALUE);
+        welcomeCard = card;
+        transcript.getChildren().add(card);
     }
 
     private void showModelCatalog() {
@@ -764,7 +817,7 @@ public class DesktopController extends Application {
                     java.util.Set<String> installedIds = installedModels.stream()
                             .map(com.localai.contracts.ModelCatalogEntry::modelId)
                             .collect(java.util.stream.Collectors.toUnmodifiableSet());
-                    Label configuredHeading = new Label("AVAILABLE FROM CONFIGURATION");
+                    Label configuredHeading = new Label("AVAILABLE MODELS");
                     configuredHeading.getStyleClass().add("library-section-label");
                     entries.getChildren().add(configuredHeading);
                     if (options.isEmpty()) {
@@ -776,17 +829,22 @@ public class DesktopController extends Application {
                         boolean installed = installedIds.contains(option.modelId())
                                 || installedIds.contains(option.modelId() + ":latest");
                         boolean active = option.modelId().equals(activeModelId);
-                        Label details = new Label(option.displayName() + "  ·  " + option.modelId()
-                                + "\n" + (installed ? "Downloaded" : "Not downloaded")
-                                + "  ·  " + option.estimatedDownloadBytes() / (1024L * 1024 * 1024)
-                                + " GiB");
-                        details.getStyleClass().add("model-library-details");
+                        Label name = new Label(option.displayName());
+                        name.getStyleClass().add("model-name");
+                        Label meta = new Label(option.modelId() + "  ·  about "
+                                + option.estimatedDownloadBytes() / (1024L * 1024 * 1024) + " GB");
+                        meta.getStyleClass().add("model-meta");
                         String hardwareAdvisory = modelHardware == null
                                 ? "Hardware advisory unavailable"
                                 : modelHardware.advisory(option);
-                        details.setText(details.getText() + "  ·  " + hardwareAdvisory);
-                        details.setWrapText(true);
-                        Label progressLabel = new Label();
+                        Label advisory = new Label(hardwareAdvisory);
+                        advisory.getStyleClass().add("model-advisory");
+                        advisory.setWrapText(true);
+                        Label badge = active ? modelBadge("In use", "badge-active")
+                                : installed ? modelBadge("Downloaded", "badge-ok")
+                                : modelBadge("Not downloaded", "badge-muted");
+                        HBox titleRow = new HBox(8, name, badge);
+                        titleRow.setAlignment(Pos.CENTER_LEFT);                        Label progressLabel = new Label();
                         progressLabel.getStyleClass().add("download-progress-label");
                         ProgressBar progressBar = new ProgressBar(-1);
                         progressBar.setMaxWidth(Double.MAX_VALUE);
@@ -794,14 +852,14 @@ public class DesktopController extends Application {
                         progressBar.setManaged(false);
                         libraryProgressBars.put(option.modelId(), progressBar);
                         libraryProgressLabels.put(option.modelId(), progressLabel);
-                        VBox modelDetails = new VBox(3, details, progressLabel, progressBar);
+                        VBox modelDetails = new VBox(3, titleRow, meta, advisory, progressLabel, progressBar);
                         Button install = new Button("Download");
                         install.getStyleClass().add("primary-button");
                         install.setVisible(!installed);
                         install.setManaged(!installed);
                         install.setDisable(modelSwitching || !modelOptionsReady);
                         install.setOnAction(event -> installModelFromLibrary(dialog, entries, option));
-                        Button use = new Button(active ? "In use" : "Use");
+                        Button use = new Button(active ? "In use" : "Use model");
                         use.getStyleClass().add(active ? "secondary-button" : "primary-button");
                         use.setVisible(installed);
                         use.setManaged(installed);
@@ -828,7 +886,7 @@ public class DesktopController extends Application {
                         entries.getChildren().add(row);
                     }
 
-                    Label installedHeading = new Label("INSTALLED ON THIS COMPUTER");
+                    Label installedHeading = new Label("OTHER INSTALLED MODELS");
                     installedHeading.getStyleClass().add("library-section-label");
                     entries.getChildren().add(installedHeading);
                     List<com.localai.contracts.ModelCatalogEntry> additionalInstalledModels = installedModels.stream()
@@ -843,15 +901,15 @@ public class DesktopController extends Application {
                         return;
                     }
                     for (var model : additionalInstalledModels) {
-                        Label details = new Label(model.modelId()
-                                + "\nSize: " + model.sizeBytes() + " bytes"
-                                + "  ·  Family: " + (model.family() == null ? "unknown" : model.family())
-                                + "  ·  Parameters: "
-                                + (model.parameterSize() == null ? "unknown" : model.parameterSize())
-                                + "  ·  Quantization: "
-                                + (model.quantizationLevel() == null ? "unknown" : model.quantizationLevel()));
-                        details.getStyleClass().add("model-library-details");
-                        details.setWrapText(true);
+                        Label name = new Label(model.modelId());
+                        name.getStyleClass().add("model-name");
+                        Label meta = new Label(String.format("%.1f GB  ·  %s  ·  %s  ·  %s",
+                                model.sizeBytes() / (1024.0 * 1024 * 1024),
+                                model.family() == null ? "unknown family" : model.family(),
+                                model.parameterSize() == null ? "unknown size" : model.parameterSize(),
+                                model.quantizationLevel() == null ? "unknown quantization" : model.quantizationLevel()));
+                        meta.getStyleClass().add("model-meta");
+                        VBox details = new VBox(3, name, meta);
                         HBox installedRow = new HBox(details);
                         installedRow.getStyleClass().add("installed-model-row");
                         entries.getChildren().add(installedRow);
@@ -1053,10 +1111,10 @@ public class DesktopController extends Application {
         Dialog<Void> dialog = new Dialog<>();
         applyDialogStyles(dialog);
         dialog.setTitle("Add web context");
-        dialog.setHeaderText("Paste up to five public page URLs, one per line");
+        dialog.setHeaderText("Paste up to five public links to pages or files, one per line");
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         TextArea urls = new TextArea();
-        urls.setPromptText("https://example.com/article");
+        urls.setPromptText("https://example.com/article or https://example.com/report.pdf");
         urls.setPrefRowCount(5);
         Label guidance = new Label(
                 "Pages will be fetched and stored in this conversation. The local model receives "
@@ -1122,6 +1180,26 @@ public class DesktopController extends Application {
                 com.localai.contracts.MessageRole.ASSISTANT, "Waiting for the local model...");
         assistantMessage.getStyleClass().add("chat-assistant-pending");
         StringBuilder assistantStreamedText = new StringBuilder();
+        java.util.concurrent.atomic.AtomicBoolean renderScheduled = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.function.Consumer<Boolean> renderStreamedText = force -> {
+            renderScheduled.set(false);
+            if (!force && activeTurnId == null) {
+                return;
+            }
+            String snapshot;
+            synchronized (assistantStreamedText) {
+                snapshot = assistantStreamedText.toString();
+            }
+            if (snapshot.isEmpty()) {
+                return;
+            }
+            stopChatWarmupIndicator();
+            if (assistantMessage.getStyleClass().contains("chat-assistant-pending")) {
+                assistantMessage.getStyleClass().remove("chat-assistant-pending");
+                status.setText("Generating response...");
+            }
+            assistantMessage.setText(snapshot);
+        };
         startChatWarmupIndicator();
         cancelButton.setDisable(true);
         apiExecutor.execute(() -> {
@@ -1134,18 +1212,16 @@ public class DesktopController extends Application {
                         });
                         case "token.delta" -> {
                             String token = event.payload().getOrDefault("text", "");
-                            assistantStreamedText.append(token);
-                            Platform.runLater(() -> {
-                                stopChatWarmupIndicator();
-                                if (assistantMessage.getStyleClass().contains("chat-assistant-pending")) {
-                                    assistantMessage.setText("");
-                                    assistantMessage.getStyleClass().remove("chat-assistant-pending");
-                                    status.setText("Generating response...");
-                                }
-                                assistantMessage.setText(assistantMessage.getText() + token);
-                            });
-                        }
-                        case "turn.completed" -> Platform.runLater(() -> {
+                            synchronized (assistantStreamedText) {
+                                assistantStreamedText.append(token);
+                            }
+                            if (renderScheduled.compareAndSet(false, true)) {
+                                progressExecutor.schedule(
+                                        () -> Platform.runLater(() -> renderStreamedText.accept(false)),
+                                        40, TimeUnit.MILLISECONDS);
+                            }
+                        }                        case "turn.completed" -> Platform.runLater(() -> {
+                            renderStreamedText.accept(true);
                             stopChatWarmupIndicator();
                             if (assistantMessage.getStyleClass().contains("chat-assistant-pending")) {
                                 assistantMessage.setText("The model returned an empty response.");
@@ -1446,3 +1522,4 @@ public class DesktopController extends Application {
         }
     }
 }
+

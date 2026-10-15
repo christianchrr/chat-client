@@ -19,7 +19,7 @@ try {
 
     $target = Join-Path $repoRoot "product-launcher\target"
     $input = Join-Path $target "app-input"
-    $destination = Join-Path $target "package-0.1.15"
+    $destination = Join-Path $target "package-0.1.20"
     $appImage = Join-Path $destination "LocalAIAssistant"
     New-Item -ItemType Directory -Path $input -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $target "product-launcher.jar") -Destination $input -Force
@@ -31,7 +31,7 @@ try {
     & $jpackage `
         --type app-image `
         --name LocalAIAssistant `
-        --app-version 0.1.15 `
+        --app-version 0.1.20 `
         --input $input `
         --main-jar product-launcher.jar `
         --main-class com.localai.launcher.ProductLauncher `

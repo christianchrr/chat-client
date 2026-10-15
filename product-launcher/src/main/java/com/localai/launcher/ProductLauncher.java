@@ -97,6 +97,10 @@ public final class ProductLauncher {
                             "logging.logback.rollingpolicy.max-file-size=5MB",
                             "logging.logback.rollingpolicy.max-history=3")
                     .run();
+            if (modelId != null) {
+                api.getBeanProvider(com.localai.model.ollama.OllamaGenerationService.class)
+                        .ifAvailable(service -> service.preloadModel(modelId));
+            }
             Application.launch(DesktopController.class, args);
         } finally {
             if (api != null) {
@@ -147,3 +151,4 @@ public final class ProductLauncher {
         return Path.of(System.getProperty("user.home"), ".localai", "LocalAIAssistant");
     }
 }
+

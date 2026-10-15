@@ -110,6 +110,31 @@ public final class OllamaGenerationService
             persistSelection(modelId);
             activeModelId.set(modelId);
         }
+        preloadModel(modelId);
+    }
+
+    public void preloadModel(String modelId) {
+        if (modelId == null || modelId.isBlank()) {
+            return;
+        }
+        Thread.startVirtualThread(() -> {
+            try {
+                String body = objectMapper.createObjectNode()
+                        .put("model", modelId)
+                        .put("keep_alive", "30m")
+                        .toString();
+                HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/generate"))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(body))
+                        .timeout(GENERATION_TIMEOUT)
+                        .build();
+                httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception ignored) {
+                // Preloading is only an optimization; the first chat request loads the model if this fails.
+            }
+        });
     }
 
     @Override
@@ -501,3 +526,4 @@ public final class OllamaGenerationService
         }
     }
 }
+
