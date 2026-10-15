@@ -1,0 +1,23 @@
+version: 1
+# Estimates are in GiB. Hardware values are guidance, not hard runtime limits.
+models:
+  - id: llama3.2:latest
+    displayName: Llama 3.2 3B
+    estimatedDownloadGb: 2
+    recommendedVramGb: 4
+    recommendedRamGb: 8
+  - id: qwen3:14b
+    displayName: Qwen3 14B
+    estimatedDownloadGb: 10
+    recommendedVramGb: 12
+    recommendedRamGb: 20
+  - id: qwen3:30b
+    displayName: Qwen3 30B
+    estimatedDownloadGb: 20
+    recommendedVramGb: 22
+    recommendedRamGb: 32
+  - id: qwen3:32b
+    displayName: Qwen3 32B
+    estimatedDownloadGb: 21
+    recommendedVramGb: 26
+    recommendedRamGb: 48

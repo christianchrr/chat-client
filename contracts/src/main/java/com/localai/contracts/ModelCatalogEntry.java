@@ -1,0 +1,24 @@
+package com.localai.contracts;
+
+import java.time.Instant;
+import java.util.List;
+
+public record ModelCatalogEntry(
+        String providerId,
+        String modelId,
+        String digest,
+        long sizeBytes,
+        Instant modifiedAt,
+        String family,
+        List<String> families,
+        String parameterSize,
+        String quantizationLevel) {
+    public ModelCatalogEntry {
+        if (providerId == null || providerId.isBlank()
+                || modelId == null || modelId.isBlank()
+                || sizeBytes < 0) {
+            throw new IllegalArgumentException("Model provider, identity, and size are invalid");
+        }
+        families = families == null ? List.of() : List.copyOf(families);
+    }
+}
