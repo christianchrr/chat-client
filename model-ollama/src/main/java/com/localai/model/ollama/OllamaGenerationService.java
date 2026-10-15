@@ -106,11 +106,33 @@ public final class OllamaGenerationService
         if (!isInstalled(modelId)) {
             installModel(modelId);
         }
-        if (!modelId.equals(activeModelId.get())) {
+        String previous = activeModelId.get();
+        if (!modelId.equals(previous)) {
             persistSelection(modelId);
             activeModelId.set(modelId);
+            unloadModel(previous);
         }
         preloadModel(modelId);
+    }
+
+    /** Frees the VRAM and RAM held by a loaded model right away instead of waiting for keep_alive. */
+    public void unloadModel(String modelId) {
+        if (modelId == null || modelId.isBlank()) {
+            return;
+        }
+        try {
+            String body = objectMapper.createObjectNode().put("model", modelId).put("keep_alive", 0).toString();
+            HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/generate"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .timeout(READINESS_TIMEOUT)
+                    .build();
+            httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception ignored) {
+            // Unloading is best effort; Ollama frees idle models on its own.
+        }
     }
 
     public void preloadModel(String modelId) {
@@ -172,6 +194,7 @@ public final class OllamaGenerationService
             }
             return;
         }
+        unloadModel(modelId);
         HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/delete"))
                 .timeout(READINESS_TIMEOUT)
                 .header("Content-Type", "application/json")

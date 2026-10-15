@@ -49,6 +49,12 @@ public class LocalApiConfiguration {
     }
 
     @Bean
+    public DropboxService dropboxService(
+            @Value("${local.ai.dropbox.path:${user.home}/.localai/dropbox}") String path) {
+        return new DropboxService(Path.of(path));
+    }
+
+    @Bean
     public WebContextFetcher webContextFetcher() {
         return new WebContextFetcher();
     }

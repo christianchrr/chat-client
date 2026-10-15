@@ -174,7 +174,7 @@ public final class WebContextFetcher {
         return type.isBlank() || type.equals("application/octet-stream") || type.equals("binary/octet-stream");
     }
 
-    private static String extractPdf(byte[] bytes) {
+    static String extractPdf(byte[] bytes) {
         try (org.apache.pdfbox.pdmodel.PDDocument document = org.apache.pdfbox.Loader.loadPDF(bytes)) {
             if (document.isEncrypted()) {
                 throw new WebContextFetchException("web_document_is_encrypted");
@@ -190,7 +190,7 @@ public final class WebContextFetcher {
         }
     }
 
-    private static String extractDocx(byte[] bytes) {
+    static String extractDocx(byte[] bytes) {
         try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(
                 new java.io.ByteArrayInputStream(bytes))) {
             for (java.util.zip.ZipEntry entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {

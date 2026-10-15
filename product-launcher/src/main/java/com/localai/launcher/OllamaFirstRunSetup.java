@@ -49,6 +49,8 @@ public final class OllamaFirstRunSetup {
     private final boolean allowLoopbackTestSource;
     private int runtimePort;
     private Process process;
+    private Thread shutdownHook;
+    private Process watchdog;
 
     public OllamaFirstRunSetup(Path dataDirectory, String modelId) {
         this(dataDirectory, modelId,
@@ -102,8 +104,11 @@ public final class OllamaFirstRunSetup {
             runtimePort = findAvailablePort();
         }
         progress.update("Starting the private local model runtime...", 0, 0);
+        reapOrphanedRuntimeProcesses(runtimeDirectory);
         process = runtimeStarter.start(
                 executable, runtimeDirectory, modelDirectory, logFile, RUNTIME_HOST, runtimePort);
+        registerShutdownHook();
+        startWatchdog(process, runtimeDirectory);
         if (!waitForReady(Duration.ofMinutes(2))) {
             stop();
             throw new IOException("The managed Ollama runtime did not become ready on its private port.");
@@ -127,7 +132,22 @@ public final class OllamaFirstRunSetup {
     public void stop() {
         Process owned = process;
         process = null;
-        if (owned != null && owned.isAlive()) {
+        Process guard = watchdog;
+        watchdog = null;
+        if (guard != null) {
+            guard.destroyForcibly();
+        }
+        if (owned == null) {
+            return;
+        }
+        // Model runner children (llama-server) hold the GPU memory and survive their parent.
+        java.util.List<ProcessHandle> children;
+        try {
+            children = owned.descendants().toList();
+        } catch (UnsupportedOperationException e) {
+            children = java.util.List.of();
+        }
+        if (owned.isAlive()) {
             owned.destroy();
             try {
                 if (!owned.waitFor(5, TimeUnit.SECONDS)) {
@@ -139,6 +159,70 @@ public final class OllamaFirstRunSetup {
                 Thread.currentThread().interrupt();
             }
         }
+        children.forEach(ProcessHandle::destroyForcibly);
+    }
+
+    /**
+     * Windows runs no Java code on End Task, so a tiny helper outlives this process and removes the
+     * runtime (and its model runners) once the launcher is gone.
+     */
+    private void startWatchdog(Process runtime, Path runtimeDirectory) {
+        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
+            return;
+        }
+        long runtimePid;
+        try {
+            runtimePid = runtime.pid();
+        } catch (UnsupportedOperationException e) {
+            return;
+        }
+        String root = runtimeDirectory.toAbsolutePath().normalize().toString().replace("'", "''");
+        String script = "$ErrorActionPreference='SilentlyContinue';"
+                + "Wait-Process -Id " + ProcessHandle.current().pid() + ";"
+                + "function Remove-RuntimeTree($id){"
+                + "Get-CimInstance Win32_Process -Filter \"ParentProcessId=$id\" | ForEach-Object { Remove-RuntimeTree $_.ProcessId };"
+                + "$p=Get-Process -Id $id; if($p -and $p.Path -like ('" + root + "' + '*')){ Stop-Process -Id $id -Force } };"
+                + "Remove-RuntimeTree " + runtimePid;
+        try {
+            watchdog = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                    "-Command", script)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+        } catch (IOException e) {
+            watchdog = null;
+        }
+    }
+
+    private void registerShutdownHook() {
+        if (shutdownHook != null) {
+            return;
+        }
+        shutdownHook = new Thread(this::stop, "ollama-shutdown");
+        try {
+            Runtime.getRuntime().addShutdownHook(shutdownHook);
+        } catch (IllegalStateException ignored) {
+            // The JVM is already shutting down.
+        }
+    }
+
+    /** Removes runtime processes left behind when a previous session was killed without a clean exit. */
+    static void reapOrphanedRuntimeProcesses(Path runtimeDirectory) {
+        String prefix = runtimeDirectory.toAbsolutePath().normalize().toString().toLowerCase(Locale.ROOT);
+        long self = ProcessHandle.current().pid();
+        ProcessHandle.allProcesses().forEach(handle -> {
+            try {
+                if (handle.pid() == self || handle.parent().filter(ProcessHandle::isAlive).isPresent()) {
+                    return;
+                }
+                handle.info().command()
+                        .map(command -> command.toLowerCase(Locale.ROOT))
+                        .filter(command -> command.startsWith(prefix))
+                        .ifPresent(command -> handle.destroyForcibly());
+            } catch (RuntimeException ignored) {
+                // Processes we cannot inspect are not ours.
+            }
+        });
     }
 
     private void installRuntime(Path runtimeDirectory, SetupProgress progress) throws IOException {

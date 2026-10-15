@@ -40,6 +40,10 @@ public class DesktopController extends Application {
     private final ScrollPane transcriptScrollPane = new ScrollPane(transcript);
     private final TextField input = new TextField();
     private final Label status = new Label("Connecting to local API...");
+    private final ThemePreference themePreference = new ThemePreference(applicationDataDirectory());
+    private boolean darkTheme;
+    private Scene primaryScene;
+    private final Button themeToggle = new Button();
     private final ComboBox<com.localai.contracts.ConversationRecord> conversationPicker = new ComboBox<>();
     private final ComboBox<ModelOption> modelPicker = new ComboBox<>();
     private final Label modelAdvice = new Label("Detecting model fit...");
@@ -53,6 +57,9 @@ public class DesktopController extends Application {
     private final Button memoryButton = new Button("Conversation memory");
     private final Button modelsButton = new Button("Model library");
     private final Button webContextButton = new Button("Add web context");
+    private final Button dropboxButton = new Button("Dropbox");
+    private volatile String pendingEditFile;
+    private final java.util.Set<String> attachedDropboxKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final ExecutorService apiExecutor = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "local-api-client");
         thread.setDaemon(true);
@@ -129,6 +136,8 @@ public class DesktopController extends Application {
         webContextButton.setText("Web context");
         webContextButton.setTooltip(new javafx.scene.control.Tooltip("Add information from public web pages and documents"));
         webContextButton.getStyleClass().add("secondary-button");
+        dropboxButton.setTooltip(new javafx.scene.control.Tooltip("Drop files for the AI to read and edit"));
+        dropboxButton.getStyleClass().add("secondary-button");
         conversationPicker.setPromptText("Select a conversation");
         conversationPicker.setMaxWidth(Double.MAX_VALUE);
         conversationPicker.setConverter(new StringConverter<>() {
@@ -200,9 +209,11 @@ public class DesktopController extends Application {
         memoryButton.setOnAction(event -> showConversationMemory());
         modelsButton.setOnAction(event -> showModelCatalog());
         webContextButton.setOnAction(event -> showWebContextDialog());
+        dropboxButton.setOnAction(event -> showDropboxDialog());
         sendButton.setDisable(true);
         modelsButton.setDisable(true);
         webContextButton.setDisable(true);
+        dropboxButton.setDisable(true);
         input.setDisable(true);
         conversationPicker.setDisable(true);
         newConversationButton.setDisable(true);
@@ -216,7 +227,10 @@ public class DesktopController extends Application {
         VBox titleBlock = new VBox(3, title, subtitle);
         HBox brandBlock = new HBox(12, brandMark, titleBlock);
         brandBlock.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-        HBox topBar = new HBox(12, brandBlock, status);
+        darkTheme = themePreference.isDark();
+        themeToggle.getStyleClass().add("theme-toggle");
+        themeToggle.setOnAction(event -> setDarkTheme(!darkTheme));
+        HBox topBar = new HBox(12, brandBlock, status, themeToggle);
         topBar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         HBox.setHgrow(brandBlock, Priority.ALWAYS);
 
@@ -231,7 +245,7 @@ public class DesktopController extends Application {
         HBox modelRow = new HBox(10, modelLabel, modelPicker, modelAdvice);
         modelRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         HBox.setHgrow(modelAdvice, Priority.ALWAYS);
-        HBox toolsRow = new HBox(8, memoryButton, modelsButton, webContextButton);
+        HBox toolsRow = new HBox(8, memoryButton, modelsButton, webContextButton, dropboxButton);
         toolsRow.getStyleClass().add("toolbar");
         VBox header = new VBox(15, topBar, conversationRow, modelRow, toolsRow);
         header.getStyleClass().add("app-header");
@@ -250,7 +264,9 @@ public class DesktopController extends Application {
             throw new IllegalStateException("Desktop stylesheet is missing.");
         }
         scene.getStylesheets().add(stylesheet.toExternalForm());
+        primaryScene = scene;
         stage.setScene(scene);
+        applyTheme();
         stage.setMinWidth(860);
         stage.setMinHeight(640);
         stage.setTitle("Local AI Assistant");
@@ -540,6 +556,7 @@ public class DesktopController extends Application {
         memoryButton.setDisable(disabled || conversationId == null);
         modelsButton.setDisable(disabled);
         webContextButton.setDisable(disabled || conversationId == null);
+        dropboxButton.setDisable(disabled || conversationId == null);
         deleteConversationButton.setDisable(disabled || conversationId == null);
         input.setDisable(disabled || activeModelId == null || conversationId == null);
         sendButton.setDisable(disabled || activeModelId == null || conversationId == null);
@@ -710,6 +727,33 @@ public class DesktopController extends Application {
         return java.nio.file.Path.of(System.getProperty("user.home"), ".localai", "LocalAIAssistant");
     }
 
+    private void setDarkTheme(boolean dark) {
+        darkTheme = dark;
+        themePreference.save(dark);
+        applyTheme();
+    }
+
+    private void applyTheme() {
+        themeToggle.setText(darkTheme ? "\u2600" : "\u263E");
+        themeToggle.setTooltip(new javafx.scene.control.Tooltip(
+                darkTheme ? "Switch to light mode" : "Switch to dark mode"));
+        for (javafx.stage.Window window : javafx.stage.Window.getWindows()) {
+            if (window.getScene() != null && window.getScene().getRoot() != null) {
+                setDarkClass(window.getScene().getRoot());
+            }
+        }
+        if (primaryScene != null) {
+            setDarkClass(primaryScene.getRoot());
+        }
+    }
+
+    private void setDarkClass(javafx.scene.Node root) {
+        root.getStyleClass().remove("dark");
+        if (darkTheme) {
+            root.getStyleClass().add("dark");
+        }
+    }
+
     private void applyDialogStyles(Dialog<?> dialog) {
         var stylesheet = getClass().getResource("desktop.css");
         if (stylesheet == null) {
@@ -717,6 +761,9 @@ public class DesktopController extends Application {
         }
         dialog.getDialogPane().getStylesheets().add(stylesheet.toExternalForm());
         dialog.getDialogPane().getStyleClass().add("app-dialog");
+        if (darkTheme) {
+            dialog.getDialogPane().getStyleClass().add("dark");
+        }
         dialog.setGraphic(null);
     }
 
@@ -1103,6 +1150,297 @@ public class DesktopController extends Application {
         return String.format(java.util.Locale.ROOT, "%.1f GiB", gibibytes);
     }
 
+    private static final java.util.regex.Pattern EDIT_INTENT = java.util.regex.Pattern.compile(
+            "\\b(edit|change|fix|update|modify|rewrite|revise|correct|replace|translate|reformat|format|add|"
+                    + "remove|delete|insert|rename|proofread|improve|shorten|expand|capitalize|convert|clean)\\w*\\b",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    static boolean looksLikeEditRequest(String message) {
+        return message != null && EDIT_INTENT.matcher(message).find();
+    }
+
+    static List<LocalApiClient.DropboxFile> mentionedFiles(
+            String message, List<LocalApiClient.DropboxFile> files) {
+        String lower = message.toLowerCase(java.util.Locale.ROOT);
+        List<LocalApiClient.DropboxFile> found = new java.util.ArrayList<>();
+        for (LocalApiClient.DropboxFile file : files) {
+            String name = file.name().toLowerCase(java.util.Locale.ROOT);
+            int dot = name.lastIndexOf('.');
+            String stem = dot > 0 ? name.substring(0, dot) : name;
+            boolean byName = lower.contains(name);
+            boolean byStem = stem.length() >= 3 && java.util.regex.Pattern
+                    .compile("(?<![\\w-])" + java.util.regex.Pattern.quote(stem) + "(?![\\w-])")
+                    .matcher(lower).find();
+            if (byName || byStem) {
+                found.add(file);
+            }
+        }
+        return found;
+    }
+
+    private String prepareDropboxContext(java.util.UUID targetConversationId, String message) {
+        pendingEditFile = null;
+        try {
+            List<LocalApiClient.DropboxFile> mentioned = mentionedFiles(message, apiClient.listDropboxFiles());
+            if (mentioned.isEmpty()) {
+                return message;
+            }
+            boolean editRequested = looksLikeEditRequest(message);
+            LocalApiClient.DropboxFile editTarget = editRequested
+                    ? mentioned.stream().filter(LocalApiClient.DropboxFile::editable)
+                            .reduce((first, second) -> second).orElse(null)
+                    : null;
+            boolean editReady = false;
+            for (LocalApiClient.DropboxFile file : mentioned) {
+                String key = targetConversationId + ":" + file.name() + ":" + file.sizeBytes();
+                boolean isEditTarget = file == editTarget;
+                if (!isEditTarget && !attachedDropboxKeys.add(key)) {
+                    continue;
+                }
+                try {
+                    var sources = apiClient.addDropboxContext(targetConversationId, List.of(file.name()));
+                    attachedDropboxKeys.add(key);
+                    boolean truncated = sources.stream().anyMatch(source -> source.content().contains("[Text truncated"));
+                    if (isEditTarget) {
+                        editReady = !truncated;
+                    }
+                    Platform.runLater(() -> {
+                        for (var source : sources) {
+                            appendChatMessage(com.localai.contracts.MessageRole.ASSISTANT,
+                                    "Dropbox file\n" + source.content()).getStyleClass().add("chat-source-message");
+                        }
+                        if (isEditTarget && truncated) {
+                            appendChatNotice(file.name() + " is too long to edit safely in one pass; "
+                                    + "it was added for reading only.");
+                        }
+                    });
+                } catch (RuntimeException e) {
+                    attachedDropboxKeys.remove(key);
+                    Platform.runLater(() -> appendChatNotice("Could not read " + file.name() + ": " + e.getMessage()));
+                }
+            }
+            if (editTarget != null && editReady) {
+                pendingEditFile = editTarget.name();
+                String formatting = editTarget.name().toLowerCase(java.util.Locale.ROOT).endsWith(".docx")
+                        ? " The file is Word, shown as Markdown: keep its structure and use the same Markdown "
+                                + "formatting (headings, **bold**, bullets, tables, <center>) so the styling is "
+                                + "preserved or improved as requested."
+                        : "";
+                return message + "\n\n(Dropbox file \"" + editTarget.name() + "\" is attached above. Reply with a "
+                        + "one-sentence summary, then the COMPLETE updated file content inside a single fenced "
+                        + "code block and nothing after it." + formatting + ")";
+            }
+        } catch (RuntimeException e) {
+            // Dropbox context is optional; the chat message is still sent without it.
+        }
+        return message;
+    }
+
+    private void finishPendingDropboxEdit(java.util.UUID editedConversationId, String reply) {
+        String fileName = pendingEditFile;
+        pendingEditFile = null;
+        if (fileName == null || !java.util.Objects.equals(editedConversationId, conversationId)) {
+            return;
+        }
+        String updated = extractFencedContent(reply);
+        if (updated == null || updated.isBlank()) {
+            appendChatNotice("No updated file content was found in the reply, so nothing was saved.");
+            return;
+        }
+        controlExecutor.execute(() -> {
+            try {
+                String newName = apiClient.saveDropboxEdit(fileName, updated);
+                Platform.runLater(() -> appendChatNotice(
+                        "Saved the edited version as " + newName + " in the Dropbox. The original is unchanged."));
+            } catch (RuntimeException e) {
+                Platform.runLater(() -> appendChatError("Could not save the edited file: " + e.getMessage()));
+            }
+        });
+    }
+
+    static String extractFencedContent(String reply) {
+        if (reply == null) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(?s)```[^\\n`]*\\n(.*?)\\n?```").matcher(reply);
+        String last = null;
+        while (matcher.find()) {
+            last = matcher.group(1);
+        }
+        return last;
+    }
+
+    private void showDropboxDialog() {
+        java.util.UUID selectedConversationId = conversationId;
+        if (selectedConversationId == null) {
+            return;
+        }
+        java.nio.file.Path folder = applicationDataDirectory().resolve("dropbox");
+        Dialog<Void> dialog = new Dialog<>();
+        applyDialogStyles(dialog);
+        dialog.setTitle("Dropbox");
+        dialog.setHeaderText("Drop files here, then mention a file by name in the chat and the AI will read it. "
+                + "Ask it to edit the file and it saves an edited copy.");
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        javafx.scene.control.ListView<LocalApiClient.DropboxFile> files = new javafx.scene.control.ListView<>();
+        files.setPlaceholder(new Label("Drag files here or click Add files"));
+        files.setCellFactory(list -> new javafx.scene.control.ListCell<>() {
+            @Override
+            protected void updateItem(LocalApiClient.DropboxFile file, boolean empty) {
+                super.updateItem(file, empty);
+                setText(empty || file == null ? null : file.name() + "  ("
+                        + (file.sizeBytes() < 1024 ? file.sizeBytes() + " B" : file.sizeBytes() / 1024 + " KB")
+                        + (file.editable() ? "" : ", read-only") + ")");
+            }
+        });
+        files.setPrefHeight(220);
+        Label result = new Label();
+        result.setWrapText(true);
+        Runnable refresh = () -> controlExecutor.execute(() -> {
+            try {
+                List<LocalApiClient.DropboxFile> current = apiClient.listDropboxFiles();
+                Platform.runLater(() -> {
+                    if (!files.getItems().equals(current)) {
+                        LocalApiClient.DropboxFile selected = files.getSelectionModel().getSelectedItem();
+                        files.getItems().setAll(current);
+                        if (selected != null) {
+                            current.stream().filter(file -> file.name().equals(selected.name())).findFirst()
+                                    .ifPresent(file -> files.getSelectionModel().select(file));
+                        }
+                    }
+                });
+            } catch (RuntimeException e) {
+                Platform.runLater(() -> result.setText("Could not load the Dropbox: " + e.getMessage()));
+            }
+        });
+        java.util.function.Consumer<List<java.io.File>> upload = picked -> controlExecutor.execute(() -> {
+            for (java.io.File file : picked) {
+                try {
+                    apiClient.uploadDropboxFile(file.getName(), java.nio.file.Files.readAllBytes(file.toPath()));
+                    Platform.runLater(() -> result.setText("Added " + file.getName()));
+                } catch (java.io.IOException | RuntimeException e) {
+                    Platform.runLater(() -> result.setText("Could not add " + file.getName() + ": " + e.getMessage()));
+                }
+            }
+            refresh.run();
+        });
+        files.setOnDragOver(event -> {
+            if (event.getDragboard().hasFiles()) {
+                event.acceptTransferModes(javafx.scene.input.TransferMode.COPY);
+            }
+            event.consume();
+        });
+        files.setOnDragDropped(event -> {
+            boolean hasFiles = event.getDragboard().hasFiles();
+            if (hasFiles) {
+                upload.accept(event.getDragboard().getFiles());
+            }
+            event.setDropCompleted(hasFiles);
+            event.consume();
+        });
+        Button addFiles = new Button("Add files");
+        addFiles.setOnAction(event -> {
+            javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
+            chooser.setTitle("Add files to the Dropbox");
+            List<java.io.File> picked = chooser.showOpenMultipleDialog(dialog.getDialogPane().getScene().getWindow());
+            if (picked != null) {
+                upload.accept(picked);
+            }
+        });
+        Button openFolder = new Button("Open folder");
+        openFolder.setOnAction(event -> {
+            try {
+                java.nio.file.Files.createDirectories(folder);
+                java.awt.Desktop.getDesktop().open(folder.toFile());
+            } catch (java.io.IOException | RuntimeException e) {
+                result.setText("Could not open the folder: " + folder);
+            }
+        });
+        Button remove = new Button("Remove");
+        remove.setOnAction(event -> {
+            LocalApiClient.DropboxFile selected = files.getSelectionModel().getSelectedItem();
+            if (selected == null) {
+                return;
+            }
+            controlExecutor.execute(() -> {
+                try {
+                    apiClient.deleteDropboxFile(selected.name());
+                    Platform.runLater(() -> result.setText("Removed " + selected.name()));
+                } catch (RuntimeException e) {
+                    Platform.runLater(() -> result.setText("Could not remove: " + e.getMessage()));
+                }
+                refresh.run();
+            });
+        });
+        Button addToChat = new Button("Add to chat");
+        addToChat.setOnAction(event -> {
+            LocalApiClient.DropboxFile selected = files.getSelectionModel().getSelectedItem();
+            if (selected == null) {
+                result.setText("Select a file first.");
+                return;
+            }
+            controlExecutor.execute(() -> {
+                try {
+                    var sources = apiClient.addDropboxContext(selectedConversationId, List.of(selected.name()));
+                    attachedDropboxKeys.add(selectedConversationId + ":" + selected.name() + ":" + selected.sizeBytes());
+                    Platform.runLater(() -> {
+                        for (var source : sources) {
+                            appendChatMessage(com.localai.contracts.MessageRole.ASSISTANT,
+                                    "Dropbox file\n" + source.content()).getStyleClass().add("chat-source-message");
+                        }
+                        result.setText("Added " + selected.name() + " to this conversation.");
+                    });
+                } catch (RuntimeException e) {
+                    boolean missing = String.valueOf(e.getMessage()).contains("dropbox_file_not_found");
+                    Platform.runLater(() -> result.setText(missing
+                            ? selected.name() + " is no longer in the Dropbox folder."
+                            : "Could not add the file: " + e.getMessage()));
+                    refresh.run();
+                }
+            });
+        });
+        HBox fileActions = new HBox(8, addFiles, openFolder, remove, addToChat);
+        TextArea instruction = new TextArea();
+        instruction.setPromptText("Describe the change, e.g. \"Fix the grammar\" or \"Add a total column\"");
+        instruction.setPrefRowCount(3);
+        instruction.setWrapText(true);
+        Button edit = new Button("Edit with AI");
+        edit.getStyleClass().add("primary-button");
+        edit.setOnAction(event -> {
+            LocalApiClient.DropboxFile selected = files.getSelectionModel().getSelectedItem();
+            String change = instruction.getText() == null ? "" : instruction.getText().strip();
+            if (selected == null || change.isEmpty()) {
+                result.setText("Select an editable file and describe the change.");
+                return;
+            }
+            if (!selected.editable()) {
+                result.setText("This file type is read-only.");
+                return;
+            }
+            if (sendButton.isDisabled()) {
+                result.setText("Wait for the current response to finish.");
+                return;
+            }
+            input.setText("Edit " + selected.name() + ": " + change);
+            dialog.close();
+            submitMessage();
+        });
+        Label note = new Label("Edits never overwrite the original. The AI's version is saved as a new file "
+                + "such as name-edited.ext, then name-edited-2.ext. PDF and Excel files are read-only.");
+        note.setWrapText(true);
+        VBox content = new VBox(10, files, fileActions, note, instruction, new HBox(8, edit, result));
+        content.setPadding(new Insets(8));
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().setPrefSize(640, 520);
+        refresh.run();
+        dialog.initModality(javafx.stage.Modality.NONE);
+        java.util.concurrent.ScheduledFuture<?> poll =
+                progressExecutor.scheduleWithFixedDelay(refresh, 2, 2, TimeUnit.SECONDS);
+        dialog.setOnHidden(event -> poll.cancel(false));
+        dialog.show();
+    }
+
     private void showWebContextDialog() {
         java.util.UUID selectedConversationId = conversationId;
         if (selectedConversationId == null) {
@@ -1204,7 +1542,8 @@ public class DesktopController extends Application {
         cancelButton.setDisable(true);
         apiExecutor.execute(() -> {
             try {
-                apiClient.streamTurn(submittedConversationId, message, clientRequestId, event -> {
+                String outgoingMessage = prepareDropboxContext(submittedConversationId, message);
+                apiClient.streamTurn(submittedConversationId, outgoingMessage, clientRequestId, event -> {
                     switch (event.type()) {
                         case "turn.started" -> Platform.runLater(() -> {
                             activeTurnId = event.turnId();
@@ -1228,6 +1567,7 @@ public class DesktopController extends Application {
                                 assistantMessage.getStyleClass().remove("chat-assistant-pending");
                             }
                             status.setText("Connected");
+                            finishPendingDropboxEdit(submittedConversationId, assistantStreamedText.toString());
                             setConversationControlsDisabled(false);
                             cancelButton.setDisable(true);
                             activeTurnId = null;

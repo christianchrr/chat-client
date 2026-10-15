@@ -49,7 +49,7 @@ public final class ProductLauncher {
                         .orElseGet(() -> hardware.defaultModelId(modelOptions));
         String apiDefaultModelId = modelId == null ? hardware.defaultModelId(modelOptions) : modelId;
         OllamaFirstRunSetup modelSetup = new OllamaFirstRunSetup(dataDirectory, modelId);
-        try (FirstRunSetupWindow setupWindow = FirstRunSetupWindow.show()) {
+        try (FirstRunSetupWindow setupWindow = FirstRunSetupWindow.show(dataDirectory)) {
             boolean prepared = false;
             while (!prepared) {
                 try {
@@ -71,6 +71,7 @@ public final class ProductLauncher {
         System.setProperty("local.api.token", token);
         System.setProperty("local.ai.api.token", token);
         System.setProperty("local.ai.db.path", dataDirectory.resolve("data").resolve("assistant.db").toString());
+        System.setProperty("local.ai.dropbox.path", dataDirectory.resolve("dropbox").toString());
         System.setProperty("local.ai.model.id", apiDefaultModelId);
         System.setProperty("local.ai.model.catalog.path", modelCatalogFile.toString());
         System.setProperty("local.ai.model.selection.path", selectionFile.toString());
@@ -88,6 +89,7 @@ public final class ProductLauncher {
                             "local.api.token=" + token,
                             "local.ai.api.token=" + token,
                             "local.ai.db.path=" + dataDirectory.resolve("data").resolve("assistant.db"),
+                            "local.ai.dropbox.path=" + dataDirectory.resolve("dropbox"),
                             "local.ai.model.id=" + apiDefaultModelId,
                             "local.ai.model.catalog.path=" + modelCatalogFile,
                             "local.ai.model.selection.path=" + selectionFile,

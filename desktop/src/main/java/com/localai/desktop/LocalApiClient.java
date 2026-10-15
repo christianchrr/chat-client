@@ -133,6 +133,57 @@ public final class LocalApiClient {
         return List.copyOf(Arrays.asList(sources));
     }
 
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    public record DropboxFile(String name, long sizeBytes, boolean editable) {
+    }
+
+    private static String encodeSegment(String value) {
+        return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    public List<DropboxFile> listDropboxFiles() {
+        return List.copyOf(Arrays.asList(send("GET", "/api/v1/dropbox/files", null, DropboxFile[].class)));
+    }
+
+    public DropboxFile uploadDropboxFile(String name, byte[] content) {
+        HttpRequest request = HttpRequest.newBuilder(baseUri.resolve("/api/v1/dropbox/files/" + encodeSegment(name)))
+                .timeout(Duration.ofSeconds(60))
+                .header("X-Local-Auth", token)
+                .header("Content-Type", "application/octet-stream")
+                .PUT(HttpRequest.BodyPublishers.ofByteArray(content))
+                .build();
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 201) {
+                throw new LocalApiException("Upload failed: " + response.body());
+            }
+            return objectMapper.readValue(response.body(), DropboxFile.class);
+        } catch (IOException e) {
+            throw new LocalApiException("Could not communicate with the local API", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new LocalApiException("Local API request was interrupted", e);
+        }
+    }
+
+    public void deleteDropboxFile(String name) {
+        send("DELETE", "/api/v1/dropbox/files/" + encodeSegment(name), null, Object.class);
+    }
+
+    public String saveDropboxEdit(String name, String content) {
+        com.fasterxml.jackson.databind.JsonNode result = send(
+                "POST", "/api/v1/dropbox/files/" + encodeSegment(name) + "/edited",
+                java.util.Map.of("content", content), com.fasterxml.jackson.databind.JsonNode.class);
+        return result.get("name").asText();
+    }
+
+    public List<MessageRecord> addDropboxContext(UUID conversationId, List<String> names) {
+        MessageRecord[] sources = send(
+                "POST", "/api/v1/conversations/" + conversationId + "/dropbox-context",
+                java.util.Map.of("names", names), MessageRecord[].class);
+        return List.copyOf(Arrays.asList(sources));
+    }
+
     public List<TurnStatusResponse> listTurns(UUID conversationId) {
         TurnStatusResponse[] turns = send(
                 "GET",
